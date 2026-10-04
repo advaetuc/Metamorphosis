@@ -1,0 +1,10 @@
+Put the face board .blend file in this folder and name it exactly:
+
+    face_board.blend
+
+It must contain the face board armature (bones named CTRL_*) and the mesh objects that are used
+as its custom bone shapes (widgets). Everything in the file is appended on import.
+
+Tip: Extensions are re-extracted when you reinstall or update them, which would delete this file.
+To keep it permanently, store face_board.blend anywhere you like and set its path in
+Edit > Preferences > Add-ons > MetaMorphosis > Face Board File.

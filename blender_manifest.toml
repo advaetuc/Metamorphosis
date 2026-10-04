@@ -1,0 +1,24 @@
+schema_version = "1.0.1"
+
+id = "metamorphosis"
+version = "1.0.1"
+name = "MetaMorphosis"
+tagline = "MetaHuman head DNA import with RigLogic baked into drivers"
+maintainer = "MetaMorphosis <noreply@example.com>"
+type = "add-on"
+
+blender_version_min = "5.0.0"
+
+license = ["SPDX:GPL-3.0-or-later"]
+copyright = ["2026 MetaMorphosis authors", "2026 Epic Games, Inc. (OpenRigLogic bindings, MIT License)"]
+
+tags = ["Rigging", "Animation", "Import-Export"]
+
+[permissions]
+files = "Read MetaHuman .dna files and the face board .blend file"
+
+[build]
+paths_exclude_pattern = [
+  "__pycache__/",
+  "*.pyc",
+]
