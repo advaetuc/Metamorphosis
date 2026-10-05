@@ -1,80 +1,144 @@
 """Locate the OpenRigLogic Python bindings and read DNA files.
 
 The compiled ``dna`` / ``riglogic`` modules are MIT licensed (Epic Games, see LICENSE-OpenRigLogic.txt)
-but they are native, per-platform binaries, so they are *not* generated here. MetaMorphosis looks for
-them, in this order:
+but they are native, per-platform binaries, so they are *not* generated here.
 
-1. ``<addon>/bindings``                       (copy the folder from Poly Hammer's add-on here)
-2. the folder set in the add-on preferences
-3. an already-enabled Poly Hammer add-on      (its loaded modules are reused; checked first)
-4. the extensions / add-ons folders on disk   (any ``*dna*/bindings`` folder)
+How the bindings work: ``dna.py`` and ``riglogic.py`` are SWIG wrappers that do ``import _py3dna13_2_7``
+and ``import _py3riglogic13_2_7`` (compiled ``.pyd`` on Windows, ``.so`` elsewhere) as *top-level* modules.
+So every folder that holds one of those files has to be on ``sys.path`` (and, on Windows, registered as a
+DLL directory). This module searches for them, so you may point it at the ``bindings`` folder, at its
+parent, or at a platform sub-folder - whatever contains them somewhere below.
 
-The bindings are only needed while *importing* (and re-baking). The imported rig itself consists
-of plain Blender drivers and does not need them.
+Search order: already-loaded bindings (e.g. Poly Hammer's enabled add-on) -> the folder set in the
+add-on preferences -> ``<addon>/bindings`` -> Blender's extension / add-on folders.
+Only importing needs the bindings. The imported rig itself is plain Blender drivers.
 """
 
 from __future__ import annotations
 
 import importlib
 import logging
+import os
 import sys
-import types
 
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_PKG_NAME = "mm_bindings"
 _cache: dict[str, Any] = {}
+_dll_handles: list = []
+NATIVE_SUFFIXES = (".pyd",) if os.name == "nt" else (".so",)
+MAX_SEARCH_DEPTH = 5
 
 
-def _valid_folder(folder: Path) -> bool:
-    return folder.is_dir() and (folder / "dna.py").exists()
+def _scan(root: Path) -> dict:
+    """Find dna.py, riglogic.py and the compiled modules below ``root`` (``root`` may also be a file)."""
+    root = Path(root)
+    if root.is_file():
+        root = root.parent
+    found = {"root": root, "exists": root.is_dir(), "dna_py": [], "riglogic_py": [], "dna_native": [], "rl_native": []}
+    if not root.is_dir():
+        return found
+    base = len(root.parts)
+    for current, dirs, files in os.walk(root):
+        here = Path(current)
+        if len(here.parts) - base >= MAX_SEARCH_DEPTH:
+            dirs[:] = []
+        dirs[:] = [d for d in dirs if d not in ("__pycache__", ".git", "node_modules")]
+        for name in files:
+            if name == "dna.py":
+                found["dna_py"].append(here)
+            elif name == "riglogic.py":
+                found["riglogic_py"].append(here)
+            elif name.startswith("_py3dna") and name.endswith(NATIVE_SUFFIXES):
+                found["dna_native"].append(here)
+            elif name.startswith("_py3riglogic") and name.endswith(NATIVE_SUFFIXES):
+                found["rl_native"].append(here)
+    return found
 
 
-def _candidate_folders(extra: str = "") -> list[Path]:
-    import bpy
-
-    candidates: list[Path] = [Path(__file__).parent / "bindings"]
-    if extra:
-        candidates.append(Path(bpy.path.abspath(extra)))
-    try:
-        ext_root = Path(bpy.utils.user_resource("EXTENSIONS"))
-        candidates += sorted(ext_root.glob("*/*dna*/bindings"))
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        scripts = Path(bpy.utils.user_resource("SCRIPTS"))
-        candidates += sorted((scripts / "addons").glob("*dna*/bindings"))
-    except Exception:  # noqa: BLE001
-        pass
-    return candidates
+def _describe(found: dict) -> str:
+    root = found["root"]
+    if not found["exists"]:
+        return f"{root}: folder does not exist"
+    parts = []
+    for key, label in (
+        ("dna_py", "dna.py"), ("riglogic_py", "riglogic.py"),
+        ("dna_native", f"_py3dna*{'/'.join(NATIVE_SUFFIXES)}"), ("rl_native", f"_py3riglogic*{'/'.join(NATIVE_SUFFIXES)}"),
+    ):
+        where = sorted({str(p) for p in found[key]})
+        parts.append(f"{label}: " + (", ".join(where) if where else "NOT FOUND"))
+    return f"{root}:\n    " + "\n    ".join(parts)
 
 
-def _from_loaded_addon():
-    """Reuse the already-imported bindings of an enabled Poly Hammer add-on (avoids loading the native module twice)."""
+def _usable(found: dict) -> bool:
+    return bool(found["dna_py"] and found["dna_native"])
+
+
+def _already_imported():
+    """Bindings that are already loaded in this Blender session (ours earlier, or another add-on's)."""
+    dna = sys.modules.get("dna")
+    if dna is not None and hasattr(dna, "BinaryStreamReader"):
+        return dna, sys.modules.get("riglogic"), Path(getattr(dna, "__file__", "") or ".").parent
     for name, module in list(sys.modules.items()):
-        if "mm_bindings" in name or not (name.endswith(".bindings") or name == "bindings"):
+        if not (name.endswith(".bindings") or name == "bindings"):
             continue
-        folder = getattr(module, "__path__", None)
-        dna = sys.modules.get(f"{name}.dna")
-        if folder and dna is not None and _valid_folder(Path(list(folder)[0])):
-            return dna, sys.modules.get(f"{name}.riglogic"), Path(list(folder)[0])
+        sub = sys.modules.get(f"{name}.dna")
+        if sub is not None and hasattr(sub, "BinaryStreamReader"):
+            return sub, sys.modules.get(f"{name}.riglogic"), Path(getattr(sub, "__file__", "") or ".").parent
     return None
 
 
-def _load_package(folder: Path):
-    sys.modules.pop(_PKG_NAME, None)
-    for key in [k for k in sys.modules if k.startswith(_PKG_NAME + ".")]:
-        sys.modules.pop(key, None)
-    package = types.ModuleType(_PKG_NAME)
-    package.__path__ = [str(folder)]  # type: ignore[attr-defined]
-    package.__package__ = _PKG_NAME
-    sys.modules[_PKG_NAME] = package
-    dna = importlib.import_module(f"{_PKG_NAME}.dna")
+def _candidate_roots(extra: str) -> list[Path]:
+    import bpy
+
+    roots: list[Path] = []
+    if extra:
+        roots.append(Path(bpy.path.abspath(extra)))
+    roots.append(Path(__file__).parent / "bindings")
+    for kind in ("EXTENSIONS", "SCRIPTS"):
+        try:
+            base = Path(bpy.utils.user_resource(kind))
+        except Exception:  # noqa: BLE001
+            continue
+        if kind == "EXTENSIONS":
+            roots += sorted(base.glob("*/*dna*"))
+        else:
+            roots += sorted((base / "addons").glob("*dna*"))
+    return roots
+
+
+def _import_from(found: dict):
+    paths: list[Path] = []
+    for key in ("dna_py", "dna_native", "riglogic_py", "rl_native"):
+        for path in found[key]:
+            if path not in paths:
+                paths.append(path)
+    inserted = []
+    for path in reversed(paths):
+        text = str(path)
+        if text not in sys.path:
+            sys.path.insert(0, text)
+            inserted.append(text)
+        if hasattr(os, "add_dll_directory"):
+            try:
+                _dll_handles.append(os.add_dll_directory(text))
+            except OSError:
+                pass
     try:
-        riglogic = importlib.import_module(f"{_PKG_NAME}.riglogic")
+        for stale in ("dna", "riglogic"):
+            module = sys.modules.get(stale)
+            if module is not None and not hasattr(module, "BinaryStreamReader") and stale == "dna":
+                sys.modules.pop(stale, None)
+        dna = importlib.import_module("dna")
+    except Exception:
+        for text in inserted:
+            if text in sys.path:
+                sys.path.remove(text)
+        raise
+    try:
+        riglogic = importlib.import_module("riglogic")
     except Exception as error:  # noqa: BLE001
         logger.warning("RigLogic runtime bindings unavailable (%s); verification will be skipped.", error)
         riglogic = None
@@ -86,34 +150,41 @@ def load_bindings(extra_folder: str = "", force: bool = False):
     if _cache and not force:
         return _cache["dna"], _cache["riglogic"], _cache["folder"]
 
-    loaded = _from_loaded_addon()
+    loaded = _already_imported()
     if loaded is not None:
         dna, riglogic, folder = loaded
         _cache.update(dna=dna, riglogic=riglogic, folder=folder)
         return dna, riglogic, folder
 
-    errors = []
-    folders = _candidate_folders(extra_folder)
-
-    seen = set()
-    for folder in folders:
-        key = str(folder)
-        if key in seen or not _valid_folder(folder):
+    report: list[str] = []
+    tried = set()
+    for root in _candidate_roots(extra_folder):
+        if str(root) in tried:
             continue
-        seen.add(key)
+        tried.add(str(root))
+        found = _scan(root)
+        if not _usable(found):
+            if found["exists"] and (found["dna_py"] or found["dna_native"]):
+                report.append(_describe(found))
+            elif root == Path(extra_folder) or str(root) == str(Path(extra_folder)):
+                report.append(_describe(found))
+            continue
         try:
-            dna, riglogic = _load_package(folder)
-        except Exception as error:  # noqa: BLE001 - wrong platform / python ABI etc.
-            errors.append(f"{folder}: {type(error).__name__}: {error}")
+            dna, riglogic = _import_from(found)
+        except Exception as error:  # noqa: BLE001 - wrong Python version / missing DLL etc.
+            report.append(_describe(found) + f"\n    IMPORT FAILED: {type(error).__name__}: {error}")
             continue
+        folder = found["dna_py"][0]
         _cache.update(dna=dna, riglogic=riglogic, folder=folder)
         return dna, riglogic, folder
 
-    detail = "\n".join(errors) if errors else "no folder containing dna.py was found"
+    if not report:
+        report.append("No folder containing dna.py and a compiled _py3dna* module was found.")
     raise RuntimeError(
-        "The OpenRigLogic bindings (dna.py + compiled modules) could not be loaded.\n"
-        "Copy the 'bindings' folder from Poly Hammer's Character DNA add-on into the MetaMorphosis "
-        "add-on folder (or set its path in the add-on preferences).\n" + detail
+        "The OpenRigLogic bindings could not be loaded.\n"
+        "Set 'OpenRigLogic Bindings Folder' in the MetaMorphosis preferences to a folder that contains (directly "
+        f"or in sub-folders) dna.py, riglogic.py and the compiled _py3dna*{NATIVE_SUFFIXES[0]} / "
+        f"_py3riglogic*{NATIVE_SUFFIXES[0]} files.\n" + "\n".join(report)
     )
 
 

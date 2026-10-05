@@ -68,6 +68,8 @@ class RigLogicModel:
         self.quat_inputs: dict[int, QuatInput] = {}
         self.raw_count = 0
         self.psd_count = 0
+        self.ml_count = 0
+        self.rbf_count = 0
         self.g2r_in = np.zeros(0, np.int64)
         self.g2r_out = np.zeros(0, np.int64)
         self.g2r_from = np.zeros(0, np.float64)
@@ -122,6 +124,17 @@ class RigLogicModel:
             raise ValueError("GUI-to-raw conditional table arrays have different lengths")
 
         m.psd_count = int(reader.getPSDCount())
+        # Newer DNA joint/PSD/shape tables also index ML and RBF output controls.
+        # Their documented order is raw, PSD, ML, RBF. JointColumnCount can be
+        # stale after export; use the explicit control counts, never pad to an
+        # arbitrary index (which would hide malformed DNA).
+        m.ml_count = int(reader.getMLControlCount()) if hasattr(reader, "getMLControlCount") else 0
+        m.rbf_count = int(reader.getRBFPoseControlCount()) if hasattr(reader, "getRBFPoseControlCount") else 0
+        if m.ml_count or m.rbf_count:
+            m.warnings.append(
+                f"DNA includes {m.ml_count} ML and {m.rbf_count} RBF controls after raw/PSD controls. "
+                "These corrective controls are not baked in Lite mode."
+            )
         m.psd_rows = _arr(reader.getPSDRowIndices(), np.int64)
         m.psd_cols = _arr(reader.getPSDColumnIndices(), np.int64)
         m.psd_vals = _arr(reader.getPSDValues(), np.float64)
@@ -130,7 +143,7 @@ class RigLogicModel:
         m.psd_base_auto = m._auto_base(m.psd_rows)
         m.psd_base_auto_swapped = m._auto_base(m.psd_cols)
 
-        # ---- joint matrix: rows = joint attributes, cols = [raw | psd]
+        # ---- joint matrix: rows = joint attributes, cols = [raw | psd | ml | rbf]
         ucount = m.ucount
         rows_total = joint_count * ATTRS_PER_JOINT
         matrix = np.zeros((rows_total, ucount), dtype=np.float32)
@@ -145,8 +158,17 @@ class RigLogicModel:
                 raise ValueError(
                     f"Joint group {group}: {rows} outputs x {cols} inputs does not match {values.size} values"
                 )
-            if out_idx.max() >= rows_total or in_idx.max() >= ucount:
-                raise ValueError(f"Joint group {group} references indices outside of the rig")
+            if out_idx.min() < 0 or out_idx.max() >= rows_total:
+                raise ValueError(
+                    f"Joint group {group}: output indices {out_idx.min()}..{out_idx.max()} "
+                    f"are outside the {rows_total} joint attributes"
+                )
+            if in_idx.min() < 0 or in_idx.max() >= ucount:
+                raise ValueError(
+                    f"Joint group {group}: input indices {in_idx.min()}..{in_idx.max()} "
+                    f"are outside {ucount} controls "
+                    f"({m.raw_count} raw + {m.psd_count} PSD + {m.ml_count} ML + {m.rbf_count} RBF)"
+                )
             matrix[np.ix_(out_idx, in_idx)] += values.reshape(rows, cols)
         m.matrix = matrix
 
@@ -175,7 +197,7 @@ class RigLogicModel:
 
     @property
     def ucount(self) -> int:
-        return self.raw_count + self.psd_count
+        return self.raw_count + self.psd_count + self.ml_count + self.rbf_count
 
     @property
     def joint_count(self) -> int:
@@ -230,7 +252,7 @@ class RigLogicModel:
         valid = True
         if rel.size and (rel.min() < 0 or rel.max() >= self.psd_count):
             valid = False
-        if inputs.size and inputs.max() >= self.ucount:
+        if inputs.size and (inputs.min() < 0 or inputs.max() >= self.ucount):
             valid = False
         if not valid:
             self._psd_cache[cache_key] = None

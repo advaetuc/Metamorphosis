@@ -28,8 +28,20 @@ class MM_PT_panel(bpy.types.Panel):
         op.enable = True
         op = row.operator("metamorphosis.toggle_rig", text="Disable", icon="PAUSE")
         op.enable = False
+        stats = rig.get("mm_stats")
+        if stats:
+            box.label(text=f"{rig.get('mm_quality', '?').title()}: {stats}")
+        box.operator("metamorphosis.rebuild", icon="FILE_REFRESH")
         box.operator("metamorphosis.validate", icon="CHECKMARK")
         box.operator("metamorphosis.benchmark", icon="TIME")
+        body_box = layout.box()
+        body_box.label(text="Combine Body Rig", icon="ARMATURE_DATA")
+        settings = context.scene.mm_body_settings
+        body_box.prop(settings, "body")
+        if settings.body:
+            body_box.prop_search(settings, "attach_bone", settings.body.data, "bones")
+        body_box.label(text="Align rest poses before combining.")
+        body_box.operator("metamorphosis.combine_body")
         if bpy.data.texts.get("MetaMorphosis Report"):
             box.label(text="Details: Text Editor > MetaMorphosis Report")
 

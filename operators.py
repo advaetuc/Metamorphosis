@@ -11,18 +11,13 @@ import bpy
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, FloatVectorProperty, IntProperty, StringProperty
 from bpy_extras.io_utils import ImportHelper
 
-from . import bake, bakeplan, dnaio, faceboard, importer, verify
+from . import bake, bakeplan, dnaio, faceboard, importer, organization, pipeline, verify
 from .constants import ADDON_ID, LABEL
 from .logicmodel import RigLogicModel
 
 logger = logging.getLogger(__name__)
 
-QUALITY_ITEMS = [
-    ("EXACT", "Exact", "Keep every non-zero weight. Largest rig, slowest to build"),
-    ("BALANCED", "Balanced", "Drop weights below 0.002 mm / 0.0001 degrees. Visually identical"),
-    ("FAST", "Fast", "Drop weights below 0.02 mm / 0.001 degrees. Smallest rig, fastest playback"),
-]
-PRUNE = {"EXACT": 1e-9, "BALANCED": 2e-6, "FAST": 2e-5}
+QUALITY_ITEMS = pipeline.QUALITY_ITEMS
 
 
 def get_preferences(context) -> "bpy.types.AddonPreferences | None":
@@ -64,7 +59,7 @@ class MM_OT_import_dna(bpy.types.Operator, ImportHelper):
         name="Face Board Location", default=(0.0, 0.0, 0.0), subtype="TRANSLATION", size=3,
         description="Extra location for the face board armature (0 keeps it where it is saved)",
     )
-    quality: EnumProperty(name="Rig Size", items=QUALITY_ITEMS, default="BALANCED")  # type: ignore[valid-type]
+    quality: EnumProperty(name="Rig Quality", items=QUALITY_ITEMS, default="LITE")  # type: ignore[valid-type]
     force_bake: BoolProperty(  # type: ignore[valid-type]
         name="Bake Even If Verification Fails", default=False,
         description="Create the drivers even when they do not reproduce RigLogic (not recommended)",
@@ -154,6 +149,8 @@ class MM_OT_import_dna(bpy.types.Operator, ImportHelper):
             board = faceboard.append_face_board(
                 context, board_path, imported.collection, tuple(self.face_board_location)
             )
+            organization.board_collections(board)
+            organization.organize_board(board, imported.collection)
             board_bone_names = set(board.bone_names)
             collisions = board_bone_names & {b.name for b in imported.rig.data.bones}
             if collisions:
@@ -166,52 +163,26 @@ class MM_OT_import_dna(bpy.types.Operator, ImportHelper):
             # ---- 4. bake
             wm.progress_update(65)
             orientation = bakeplan.joint_orientation_inverse(reader, model.joint_count, rotation_degrees)
-            plan = bakeplan.build_plan(
-                model,
-                variant,
-                orientation,
+            plan, stats = pipeline.run_bake(
+                context,
+                model=model,
+                variant=variant,
+                reader_orientation=orientation,
+                rig=imported.rig,
+                board_object=board_object,
+                board_bone_names=board_bone_names,
+                shape_key_map=imported.shape_key_map if self.import_shape_keys else {},
+                meshes=imported.meshes,
+                collection=imported.collection,
+                prefix=prefix,
+                quality=self.quality,
                 scale=self.scale,
                 rotation_degrees=rotation_degrees,
-                prune=PRUNE[self.quality],
-                face_board_bones=board_bone_names,
-                shape_channels=set(imported.shape_key_map.keys()) if self.import_shape_keys else set(),
-            )
-            estimated_variables = sum(len(node.vars) for node in plan.nodes)
-            if estimated_variables > 300_000 and self.quality == "EXACT":
-                report_lines.append(
-                    f"Warning: {estimated_variables} driver variables will be created. "
-                    "Re-import with Rig Size 'Balanced' or 'Fast' if playback is slow."
-                )
-            holders = [
-                bake.create_data_object(imported.collection, prefix, i) for i in range(bake.holders_needed(plan))
-            ]
-            report_lines.append(
-                f"About to create {len(plan.nodes)} drivers with {estimated_variables} variables "
-                f"({plan.stats['properties']} helper properties on {len(holders)} data objects)..."
-            )
-            bake.write_report(report_lines)  # written first so the numbers are visible even if Blender is busy
-            wm.progress_update(75)
-            stats = bake.realize(
-                plan,
-                rig=imported.rig,
-                board=board_object,
-                holders=holders,
-                shape_key_map=imported.shape_key_map,
-                board_bone_names=board_bone_names,
                 dna_path=str(dna_path),
-                scale=self.scale,
+                report=report_lines,
                 progress=lambda fraction: wm.progress_update(int(75 + 24 * fraction)),
             )
-            report_lines += [
-                "",
-                f"Baked drivers: {stats['drivers']} ({stats['variables']} variables) in {stats['seconds']:.1f}s",
-                f"  driven bones: {plan.stats['driven_bones']}, bone channels: {plan.stats['bone_channels']}, "
-                f"shape key drivers: {stats['shape_drivers']}",
-                f"  pruned weights: {plan.stats['pruned_terms']}, kept: {plan.stats['terms']}",
-                f"  drivers that would need Python: {stats['not_simple']}",
-            ]
-            if stats["not_simple"]:
-                report_lines.append("  (Enable 'Auto Run Python Scripts' or re-import; please report this.)")
+            report_lines += _stats_lines(plan, stats)
         except Exception as error:  # noqa: BLE001
             logger.exception("MetaMorphosis import failed")
             report_lines += ["", f"FAILED: {type(error).__name__}: {error}", "", traceback.format_exc()]
@@ -226,6 +197,120 @@ class MM_OT_import_dna(bpy.types.Operator, ImportHelper):
         report_lines.append(f"Total time: {time.perf_counter() - started:.1f}s")
         bake.write_report(report_lines)
         self.report({"INFO"}, f"Imported {prefix}: {stats['drivers']} baked drivers. See 'MetaMorphosis Report'.")
+        return {"FINISHED"}
+
+
+def _stats_lines(plan, stats) -> list:
+    lines = [
+        "",
+        f"Baked drivers: {stats['drivers']} ({stats['variables']} variables) in {stats['seconds']:.1f}s",
+        f"  driven bones: {plan.stats['driven_bones']} (skipped {stats['skipped_bones']} that deform nothing), "
+        f"bone channels: {plan.stats['bone_channels']}, shape key drivers: {stats['shape_drivers']}",
+        f"  weights kept: {plan.stats['terms']}, dropped within the error budget: {plan.stats['pruned_terms']}",
+        f"  drivers that would need Python: {stats['not_simple']}",
+    ]
+    if stats["variables"] > 150_000:
+        lines.append("  Large rig: viewport speed also depends on mesh complexity and scene settings.")
+    return lines
+
+
+class MM_OT_rebuild(bpy.types.Operator):
+    """Rebuild the baked drivers in Lite mode (needs the DNA file and the bindings, no re-import)"""
+
+    bl_idname = "metamorphosis.rebuild"
+    bl_label = "Rebuild Drivers"
+    bl_options = {"REGISTER", "UNDO"}
+
+    quality: EnumProperty(name="Rig Quality", items=QUALITY_ITEMS, default="LITE")  # type: ignore[valid-type]
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self)
+
+    def execute(self, context):
+        rig = bake.find_baked_rig(context)
+        if rig is None:
+            self.report({"ERROR"}, "No MetaMorphosis rig found")
+            return {"CANCELLED"}
+        dna_path = Path(str(rig.get(bake.RIG_KEY_DNA, "")))
+        if not dna_path.is_file():
+            self.report({"ERROR"}, f"The DNA file is missing: {dna_path}")
+            return {"CANCELLED"}
+        prefs = get_preferences(context)
+        bindings_folder = prefs.bindings_folder if prefs else ""
+        wm = context.window_manager
+        report_lines = ["MetaMorphosis rebuild report", "", f"DNA: {dna_path}"]
+        reader = None
+        wm.progress_begin(0, 100)
+        try:
+            dnaio.load_bindings(bindings_folder)
+            reader = dnaio.open_reader(dna_path, bindings_folder)
+            rotation_degrees, _units = dnaio.unit_flags(reader)
+            model = RigLogicModel.from_reader(reader)
+            _dna, riglogic, _folder = dnaio.load_bindings(bindings_folder)
+            wm.progress_update(10)
+            result = verify.verify_model(model, riglogic, reader, release=dnaio.release_handle)
+            report_lines += [f"Verification: {result.status}", result.message, "", *result.details, ""]
+            if result.status == "failed":
+                bake.write_report(report_lines)
+                self.report({"ERROR"}, result.message)
+                return {"CANCELLED"}
+            variant = result.variant or model.variants()[0]
+
+            children = bake.head_meshes(rig)
+            channel_of = {str(reader.getBlendShapeChannelName(i)): i for i in range(reader.getBlendShapeChannelCount())}
+            shape_key_map: dict = {}
+            for mesh in children:
+                key = mesh.data.shape_keys
+                if key is None:
+                    continue
+                for block in key.key_blocks:
+                    channel = channel_of.get(block.name)
+                    if channel is not None and block.name != "Basis":
+                        shape_key_map.setdefault(channel, []).append((key, block.name))
+
+            board_object = bpy.data.objects.get(str(rig.get(bake.RIG_KEY_BOARD_OBJECT, ""))) or rig
+            board_bones = set(filter(None, str(rig.get(bake.RIG_KEY_BOARD, "")).split("\n")))
+            collection = bpy.data.collections.get(str(rig.get("mm_character_collection", "")))
+            if collection is None:
+                collection = rig.users_collection[0] if rig.users_collection else context.scene.collection
+            prefix = str(rig.get(bake.RIG_KEY_PREFIX, rig.name))
+            scale = float(rig.get(bake.RIG_KEY_SCALE, 0.01))
+
+            wm.progress_update(20)
+            bake.remove_baked(rig)
+            orientation = bakeplan.joint_orientation_inverse(reader, model.joint_count, rotation_degrees)
+            plan, stats = pipeline.run_bake(
+                context,
+                model=model,
+                variant=variant,
+                reader_orientation=orientation,
+                rig=rig,
+                board_object=board_object,
+                board_bone_names=board_bones,
+                shape_key_map=shape_key_map,
+                meshes=children,
+                collection=collection,
+                prefix=prefix,
+                quality=self.quality,
+                scale=scale,
+                rotation_degrees=rotation_degrees,
+                dna_path=str(dna_path),
+                report=report_lines,
+                progress=lambda fraction: wm.progress_update(int(30 + 69 * fraction)),
+            )
+            report_lines += _stats_lines(plan, stats)
+        except Exception as error:  # noqa: BLE001
+            logger.exception("MetaMorphosis rebuild failed")
+            report_lines += ["", f"FAILED: {type(error).__name__}: {error}", "", traceback.format_exc()]
+            bake.write_report(report_lines)
+            self.report({"ERROR"}, f"Rebuild failed: {error}")
+            return {"CANCELLED"}
+        finally:
+            if reader is not None:
+                dnaio.release_handle(reader)
+            wm.progress_end()
+        bake.write_report(report_lines)
+        self.report({"INFO"}, f"Rebuilt: {stats['drivers']} drivers ({self.quality}).")
         return {"FINISHED"}
 
 
@@ -284,9 +369,33 @@ class MM_OT_validate(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class MM_OT_test_bindings(bpy.types.Operator):
+    """Try to load the OpenRigLogic bindings and write the result to the 'MetaMorphosis Report' text block"""
+
+    bl_idname = "metamorphosis.test_bindings"
+    bl_label = "Test Bindings"
+
+    def execute(self, context):
+        prefs = get_preferences(context)
+        try:
+            dna, riglogic, folder = dnaio.load_bindings(prefs.bindings_folder if prefs else "", force=True)
+        except RuntimeError as error:
+            bake.write_report(["MetaMorphosis bindings test: FAILED", "", str(error)])
+            self.report({"ERROR"}, "Bindings not found - details are in the 'MetaMorphosis Report' text block")
+            return {"CANCELLED"}
+        lines = [
+            "MetaMorphosis bindings test: OK",
+            f"dna.py loaded from: {folder}",
+            f"RigLogic runtime: {'available' if riglogic is not None else 'NOT available (verification will be skipped)'}",
+        ]
+        bake.write_report(lines)
+        self.report({"INFO"}, lines[1])
+        return {"FINISHED"}
+
+
 def menu_import(self, _context):
     self.layout.operator(MM_OT_import_dna.bl_idname, text="MetaHuman Head DNA (MetaMorphosis)")
 
 
-CLASSES = (MM_OT_import_dna, MM_OT_toggle_rig, MM_OT_benchmark, MM_OT_validate)
+CLASSES = (MM_OT_import_dna, MM_OT_rebuild, MM_OT_toggle_rig, MM_OT_benchmark, MM_OT_validate, MM_OT_test_bindings)
 __all__ = ["CLASSES", "LABEL", "menu_import", "get_preferences"]

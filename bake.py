@@ -22,19 +22,24 @@ RIG_KEY_BOARD = "mm_board_bones"
 RIG_KEY_DATA = "mm_data_object"
 RIG_KEY_DNA = "mm_source_dna"
 RIG_KEY_SCALE = "mm_scale"
+RIG_KEY_BOARD_OBJECT = "mm_board_object"
+RIG_KEY_PREFIX = "mm_prefix"
+RIG_KEY_QUALITY = "mm_quality"
+RIG_KEY_STATS = "mm_stats"
 
 
-SHARD_SIZE = 800  # driven properties per data empty (Blender's driver_add slows down quadratically per ID)
+SHARD_SIZE = 250  # properties per data empty: driver_add and custom-property lookups both scale with this
 
 
 def create_data_object(collection: bpy.types.Collection, prefix: str, index: int = 0) -> bpy.types.Object:
     """An empty that stores baked helper values. It is tiny, unselectable and must stay in the file."""
-    name = f"{prefix}_{DATA_OBJECT_NAME}_{index:02d}"
+    name = f"{prefix}_{DATA_OBJECT_NAME}_{index:02d}".upper()
     empty = bpy.data.objects.new(name, None)
     empty.empty_display_type = "PLAIN_AXES"
     empty.empty_display_size = 0.001
     empty.hide_select = True
     empty.hide_render = True
+    empty.hide_viewport = True
     collection.objects.link(empty)
     return empty
 
@@ -56,8 +61,9 @@ def _add_variable(driver, var, *, holder_of, rig, board) -> None:
     target = variable.targets[0]
     target.id_type = "OBJECT"
     if var.kind == "prop":
-        target.id = holder_of[var.ref]
-        target.data_path = f'["{var.ref}"]'
+        holder, index = holder_of[var.ref]
+        target.id = holder
+        target.data_path = f'["mm_values"][{index}]'
     elif var.kind == "loc":
         target.id = board
         target.data_path = f'pose.bones["{var.ref}"].location[{var.index}]'
@@ -104,11 +110,13 @@ def realize(
 
     # spread the helper properties over the holders: dependency order -> consecutive blocks
     holder_of: dict = {}
-    names = list(plan.props)
-    for i, name in enumerate(names):
-        holder = holders[min(i // SHARD_SIZE, len(holders) - 1)]
-        holder_of[name] = holder
-        holder[name] = float(plan.props[name])
+    for holder, group in zip(holders, helper_groups(plan)):
+        if group:
+            # One array lookup replaces a linear search through hundreds of ID properties.
+            # A separate driver still writes each element, preserving all rounding boundaries.
+            holder["mm_values"] = [float(plan.props[name]) for name in group]
+            for index, name in enumerate(group):
+                holder_of[name] = (holder, index)
 
     for pose_bone in rig.pose.bones:
         if pose_bone.name in plan.quat_bones:
@@ -126,8 +134,8 @@ def realize(
     for number, node in enumerate(plan.nodes):
         kind = node.target[0]
         if kind == "prop":
-            owner = holder_of[node.target[1]]
-            _add_driver(owner, f'["{node.target[1]}"]', -1, node, holder_of=holder_of, rig=rig, board=board, counters=counters)
+            owner, index = holder_of[node.target[1]]
+            _add_driver(owner, '["mm_values"]', index, node, holder_of=holder_of, rig=rig, board=board, counters=counters)
         elif kind == "bone":
             _, bone, path, index = node.target
             _add_driver(
@@ -163,8 +171,62 @@ def realize(
     return counters
 
 
+def remove_baked(rig: bpy.types.Object) -> None:
+    """Delete every driver / data empty created by a previous bake and put the driven bones back to rest."""
+    driven = set(filter(None, str(rig.get(RIG_KEY_BONES, "")).split("\n")))
+    if rig.animation_data:
+        for fcurve in list(rig.animation_data.drivers):
+            path = fcurve.data_path
+            if path.startswith('pose.bones["'):
+                bone = path[len('pose.bones["') : path.index('"]')]
+                if bone in driven:
+                    rig.animation_data.drivers.remove(fcurve)
+    for mesh in head_meshes(rig):
+        key = mesh.data.shape_keys
+        if key and key.animation_data:
+            for fcurve in list(key.animation_data.drivers):
+                if fcurve.data_path.startswith("key_blocks["):
+                    key.animation_data.drivers.remove(fcurve)
+            for block in key.key_blocks:
+                if block.name != "Basis":
+                    block.value = 0.0
+    for holder_name in filter(None, str(rig.get(RIG_KEY_DATA, "")).split("\n")):
+        holder = bpy.data.objects.get(holder_name)
+        if holder is not None:
+            bpy.data.objects.remove(holder, do_unlink=True)
+    for pose_bone in rig.pose.bones:
+        if pose_bone.name in driven:
+            pose_bone.location = (0.0, 0.0, 0.0)
+            pose_bone.rotation_euler = (0.0, 0.0, 0.0)
+            pose_bone.scale = (1.0, 1.0, 1.0)
+
+
 def holders_needed(plan: Plan) -> int:
-    return max(1, -(-len(plan.props) // SHARD_SIZE))
+    return max(1, len(helper_groups(plan)))
+
+
+def helper_groups(plan: Plan) -> list:
+    """Array properties must not contain drivers which read from that same array.
+
+    Blender tracks array dependencies at property level. Separate dependency depths
+    prevent cycles while allowing constant-time indexed access to helper values.
+    """
+    depth = dict.fromkeys(plan.props, 0)
+    for node in plan.nodes:
+        if node.target[0] == "prop":
+            depth[node.target[1]] = 1 + max((depth[v.ref] for v in node.vars if v.kind == "prop"), default=0)
+    levels = {}
+    for name in plan.props:
+        levels.setdefault(depth[name], []).append(name)
+    return [names[i:i + SHARD_SIZE] for level, names in sorted(levels.items())
+            for i in range(0, len(names), SHARD_SIZE)]
+
+
+def head_meshes(rig):
+    """Restrict rebuild/toggle to the imported head, including after a body join."""
+    scoped = rig.get("mm_mesh_scope", False)
+    return [o for o in bpy.data.objects if o.type == "MESH" and o.parent == rig
+            and (not scoped or o.get("mm_head_mesh", False))]
 
 
 # ------------------------------------------------------------------ utilities
@@ -194,11 +256,10 @@ def baked_fcurves(rig: bpy.types.Object):
                 bone = path[len('pose.bones["') : path.index('"]')]
                 if bone in driven:
                     yield fcurve
-    for mesh in bpy.data.objects:
-        if mesh.type == "MESH" and mesh.parent is rig:
-            key = mesh.data.shape_keys
-            if key and key.animation_data:
-                yield from key.animation_data.drivers
+    for mesh in head_meshes(rig):
+        key = mesh.data.shape_keys
+        if key and key.animation_data:
+            yield from key.animation_data.drivers
 
 
 def set_baked_enabled(rig: bpy.types.Object, enabled: bool) -> int:
@@ -214,8 +275,8 @@ def set_baked_enabled(rig: bpy.types.Object, enabled: bool) -> int:
                 pose_bone.location = (0.0, 0.0, 0.0)
                 pose_bone.rotation_euler = (0.0, 0.0, 0.0)
                 pose_bone.scale = (1.0, 1.0, 1.0)
-        for mesh in bpy.data.objects:
-            if mesh.type == "MESH" and mesh.parent is rig and mesh.data.shape_keys:
+        for mesh in head_meshes(rig):
+            if mesh.data.shape_keys:
                 for block in mesh.data.shape_keys.key_blocks:
                     if block.name != "Basis" and block.relative_key is not block:
                         block.value = 0.0
@@ -241,21 +302,24 @@ def validate_rig(rig: bpy.types.Object) -> dict:
 def benchmark(context, rig: bpy.types.Object, iterations: int = 20) -> dict:
     """Time depsgraph updates while wiggling a few face board controls."""
     board_names = [n for n in str(rig.get(RIG_KEY_BOARD, "")).split("\n") if n]
-    bones = [rig.pose.bones[n] for n in board_names if n in rig.pose.bones and n.startswith("CTRL_")][:12]
+    board = bpy.data.objects.get(str(rig.get(RIG_KEY_BOARD_OBJECT, ""))) or rig
+    bones = [board.pose.bones[n] for n in board_names if n in board.pose.bones and n.startswith("CTRL_")][:12]
     if not bones:
         return {"ms": float("nan"), "fps": float("nan"), "controls": 0}
     saved = [tuple(b.location) for b in bones]
     context.view_layer.update()
     started = time.perf_counter()
-    for i in range(iterations):
-        amount = 0.15 + 0.02 * (i % 5)
-        for bone in bones:
-            bone.location.y = amount if i % 2 else -amount * 0.0
+    try:
+        for i in range(iterations):
+            amount = 0.15 + 0.02 * (i % 5)
+            for bone in bones:
+                bone.location.y = amount if i % 2 else -amount * 0.0
+            context.view_layer.update()
+        elapsed = (time.perf_counter() - started) / iterations
+    finally:
+        for bone, location in zip(bones, saved):
+            bone.location = location
         context.view_layer.update()
-    elapsed = (time.perf_counter() - started) / iterations
-    for bone, location in zip(bones, saved):
-        bone.location = location
-    context.view_layer.update()
     return {"ms": elapsed * 1000.0, "fps": 1.0 / elapsed if elapsed > 0 else float("inf"), "controls": len(bones)}
 
 

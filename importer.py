@@ -20,6 +20,7 @@ from mathutils import Matrix, Vector
 
 from .constants import ATTRS_PER_JOINT, NUMBER_OF_LODS  # noqa: F401
 from .bakeplan import euler_xyz_matrix
+from . import organization
 
 logger = logging.getLogger(__name__)
 
@@ -49,11 +50,12 @@ class ImportResult:
 
 def unique_prefix(prefix: str) -> str:
     """Return ``prefix`` or ``prefix_001``... so that nothing already in the file is overwritten."""
+    prefix = prefix.upper()
     candidate, n = prefix, 0
     while (
-        f"{candidate}_rig" in bpy.data.objects
+        f"{candidate}_RIG" in bpy.data.objects
         or candidate in bpy.data.collections
-        or f"{candidate}_rig" in bpy.data.armatures
+        or f"{candidate}_RIG" in bpy.data.armatures
     ):
         n += 1
         candidate = f"{prefix}_{n:03d}"
@@ -71,7 +73,7 @@ def _to_blender(x, y, z, scale: float) -> np.ndarray:
 
 
 def _create_rig(reader, options: ImportOptions, collection: bpy.types.Collection) -> bpy.types.Object:
-    name = f"{options.prefix}_rig"
+    name = f"{options.prefix}_RIG".upper()
     armature = bpy.data.armatures.new(name)
     rig = bpy.data.objects.new(name, armature)
     collection.objects.link(rig)
@@ -124,12 +126,7 @@ def _create_rig(reader, options: ImportOptions, collection: bpy.types.Collection
         bpy.ops.object.mode_set(mode="OBJECT")
 
     armature.relation_line_position = "HEAD"
-    try:
-        collection_bones = armature.collections.new("MM Face Rig")
-        for bone in armature.bones:
-            collection_bones.assign(bone)
-    except Exception as error:  # noqa: BLE001 - bone collections are cosmetic
-        logger.debug("Bone collection assignment skipped: %s", error)
+    organization.deformation_collections(rig)
     return rig
 
 
@@ -137,7 +134,7 @@ def _create_mesh(
     reader, mesh_index: int, mesh_name: str, options: ImportOptions, rig, collection, joint_names, result
 ) -> bpy.types.Object:
     kind = _kind_of(mesh_name)
-    object_name = f"{options.prefix}_{kind}"
+    object_name = f"{options.prefix}_{kind}".upper()
     positions = _to_blender(
         np.asarray(reader.getVertexPositionXs(mesh_index), np.float64),
         np.asarray(reader.getVertexPositionYs(mesh_index), np.float64),
@@ -260,7 +257,12 @@ def import_head(reader, options: ImportOptions) -> ImportResult:
 
     result = ImportResult(rig=None, collection=collection, prefix=options.prefix)  # type: ignore[arg-type]
     joint_names = [str(reader.getJointName(i)) for i in range(reader.getJointCount())]
-    result.rig = _create_rig(reader, options, collection)
+    rig_collection = organization.child_collection(collection, "ARMATURE")
+    mesh_collection = organization.child_collection(collection, "HEAD")
+    organization.child_collection(collection, "RIGLOGICDATA")
+    result.rig = _create_rig(reader, options, rig_collection)
+    result.rig["mm_character_collection"] = collection.name
+    result.rig["mm_mesh_scope"] = True
 
     lod_meshes = list(reader.getMeshIndicesForLOD(options.lod))
     if not lod_meshes:
@@ -268,8 +270,9 @@ def import_head(reader, options: ImportOptions) -> ImportResult:
     for mesh_index in lod_meshes:
         mesh_name = str(reader.getMeshName(mesh_index))
         try:
-            obj = _create_mesh(reader, mesh_index, mesh_name, options, result.rig, collection, joint_names, result)
+            obj = _create_mesh(reader, mesh_index, mesh_name, options, result.rig, mesh_collection, joint_names, result)
             result.meshes.append(obj)
+            obj["mm_head_mesh"] = True
         except Exception as error:  # noqa: BLE001 - keep importing the other meshes
             logger.exception("Mesh '%s' failed", mesh_name)
             result.warnings.append(f"Mesh '{mesh_name}' failed to import: {error}")

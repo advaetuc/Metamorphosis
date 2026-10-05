@@ -15,8 +15,8 @@ class MM_Preferences(bpy.types.AddonPreferences):
         subtype="DIR_PATH",
         default="",
         description=(
-            "Folder that contains dna.py and the compiled DNA/RigLogic modules (the 'bindings' folder of "
-            "Poly Hammer's Character DNA add-on). Leave empty to use <addon>/bindings or auto-detect"
+            "The 'bindings' folder of Poly Hammer's Character DNA add-on, or any folder above it. Sub-folders are "
+            "searched for dna.py and the compiled _py3dna / _py3riglogic files. Leave empty to auto-detect"
         ),
     )
     face_board_file: StringProperty(  # type: ignore[valid-type]
@@ -31,6 +31,7 @@ class MM_Preferences(bpy.types.AddonPreferences):
         layout.label(text=f"{LABEL} needs two things only while importing:")
         layout.prop(self, "face_board_file")
         layout.prop(self, "bindings_folder")
+        layout.operator("metamorphosis.test_bindings", icon="CHECKMARK")
         layout.label(text="The imported rig is plain Blender drivers and works without this add-on.", icon="INFO")
 
 

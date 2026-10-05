@@ -94,6 +94,47 @@ def _constraints_missing_target(armature: bpy.types.Object) -> int:
     return missing
 
 
+def link_center_eye(board: bpy.types.Object) -> int:
+    """Show the combined gaze on the side widgets; the bake adds its raw input.
+
+    Native offset constraints leave each side's location channels available for
+    independent posing and keys. Reuse existing center-eye Copy Location links
+    (including manually added links) so rebuilding never doubles the offset.
+    """
+    if "CTRL_C_eye" not in board.pose.bones:
+        return 0
+    linked = 0
+    for name in ("CTRL_L_eye", "CTRL_R_eye"):
+        bone = board.pose.bones.get(name)
+        if bone is None:
+            continue
+        matches = [c for c in bone.constraints if c.type == "COPY_LOCATION"
+                   and c.target == board and c.subtarget == "CTRL_C_eye"]
+        constraint = matches[0] if matches else bone.constraints.new("COPY_LOCATION")
+        for duplicate in matches[1:]:
+            bone.constraints.remove(duplicate)
+        constraint.name = "MM Middle Eye"
+        constraint.target = board
+        constraint.subtarget = "CTRL_C_eye"
+        constraint.owner_space = "LOCAL"
+        constraint.target_space = "LOCAL"
+        constraint.use_x = constraint.use_y = True
+        constraint.use_z = False
+        constraint.invert_x = constraint.invert_y = constraint.invert_z = False
+        constraint.use_offset = True
+        constraint.head_tail = 0.0
+        constraint.influence = 1.0
+        constraint.mute = False
+        # Apply the existing location limits after the shared offset.
+        constraints = list(bone.constraints)
+        limit = next((i for i, c in enumerate(constraints) if c.type == "LIMIT_LOCATION"), None)
+        index = constraints.index(constraint)
+        if limit is not None and index > limit:
+            bone.constraints.move(index, limit)
+        linked += 1
+    return linked
+
+
 def join_into_rig(context: bpy.context, rig: bpy.types.Object, board: FaceBoard) -> bool:
     """Join the face board armature into ``rig`` (one armature, every bone editable).
 

@@ -139,9 +139,18 @@ class _Builder:
         if self.face_board_bones is not None and control.bone not in self.face_board_bones:
             return name
         lo, hi = span
-        expr = f"max({fmt_num(lo)},min({fmt_num(hi)},v0))"
+        variables = [Var("v0", "loc", control.bone, control.axis)]
+        value = "v0"
+        # The DNA lists only the individual gaze controls. Reading their raw
+        # location does not include the board's Copy Location constraints.
+        # Add the central gaze explicitly, keeping each side freely animatable.
+        if (control.bone in {"CTRL_L_eye", "CTRL_R_eye"} and control.axis in {0, 1}
+                and self.face_board_bones is not None and "CTRL_C_eye" in self.face_board_bones):
+            variables.append(Var("v1", "loc", "CTRL_C_eye", control.axis))
+            value = "v0+max(-1,min(1,v1))"
+        expr = f"max({fmt_num(lo)},min({fmt_num(hi)},{value}))"
         self.add_node(
-            ("prop", name), "SCRIPTED", expr, [Var("v0", "loc", control.bone, control.axis)], "gui"
+            ("prop", name), "SCRIPTED", expr, variables, "gui"
         )
         return name
 
@@ -255,6 +264,17 @@ def euler_xyz_matrix(x: float, y: float, z: float) -> np.ndarray:
     return rz @ ry @ rx
 
 
+def _keep_within_budget(row: np.ndarray, eps: float) -> np.ndarray:
+    """Indices of ``row`` to keep: drop smallest weights while their summed magnitude stays <= ``eps``."""
+    nonzero = np.flatnonzero(row)
+    if nonzero.size == 0 or eps <= 0.0:
+        return nonzero
+    magnitude = np.abs(row[nonzero])
+    order = np.argsort(magnitude, kind="stable")
+    dropped = int(np.searchsorted(np.cumsum(magnitude[order]), eps, side="right"))
+    return np.sort(nonzero[order[dropped:]])
+
+
 def build_plan(
     model: RigLogicModel,
     variant: Variant,
@@ -262,7 +282,8 @@ def build_plan(
     *,
     scale: float = 0.01,
     rotation_degrees: bool = True,
-    prune: float = 2e-6,
+    budget: tuple = (0.0, 0.0, 0.0),
+    use_psd: bool = True,
     face_board_bones: set[str] | None = None,
     shape_channels: set[int] | None = None,
     skip_bones: set[str] | None = None,
@@ -272,6 +293,10 @@ def build_plan(
     Args:
         orientation_inverse: ``(J, 3, 3)`` ``E^-1`` per joint (see :func:`joint_orientation_inverse`).
         scale: multiplier from DNA length units to Blender units (0.01 for centimetres).
+        budget: per attribute type (translation m, rotation rad, scale) the largest total error that may be
+            dropped from one channel. Weights are removed smallest-first while the sum of the removed
+            absolute weights stays within the budget (worst case, with every control at 1.0).
+        use_psd: ``False`` drops the combination correctives (PSD) entirely ("Lite").
         face_board_bones: names of the face-board bones that exist; ``None`` means "assume all".
         shape_channels: blend shape channel indices that exist as shape keys in Blender.
         skip_bones: bones that must not be driven (RigLogic inputs, i.e. the quaternion bones).
@@ -285,14 +310,17 @@ def build_plan(
     if u0 is None:
         raise ValueError("The PSD table is not valid for the selected interpretation")
     u0 = u0[0]
-    base = model.joint_delta(u0[None, :])[0]  # outputs at the neutral pose (should be ~0)
+    matrix = model.matrix.astype(np.float64)
+    if not use_psd:
+        matrix = matrix.copy()
+        matrix[:, model.raw_count :] = 0.0
+    base = matrix @ u0  # outputs at the neutral pose (should be ~0)
 
     angle_factor = math.pi / 180.0 if rotation_degrees else 1.0
     rows_built = 0
     pruned_terms = 0
     kept_terms = 0
     channel_plans = []  # (bone, path, index, cols, weights, const)
-    matrix = model.matrix.astype(np.float64)
     for joint, bone in enumerate(model.joint_names):
         if bone in skip:
             continue
@@ -311,7 +339,7 @@ def build_plan(
         base_combined[6:9] = base_block[6:9]
         for a in range(9):
             row = combined[a]
-            keep = np.flatnonzero(np.abs(row) > prune)
+            keep = _keep_within_budget(row, budget[a // 3])
             pruned_terms += int(np.count_nonzero(row)) - keep.size
             const = -float(base_combined[a])
             if a >= 6:
@@ -327,7 +355,7 @@ def build_plan(
     wanted_bs = {}
     if shape_channels:
         for col, channel in zip(model.bs_in.tolist(), model.bs_out.tolist()):
-            if channel in shape_channels:
+            if channel in shape_channels and (use_psd or col < model.raw_count):
                 wanted_bs[channel] = col
 
     # emit upstream nodes first (GUI -> raw -> PSD), only for columns that something reads
@@ -344,7 +372,7 @@ def build_plan(
         if abs(const) > 1e-9:
             terms.append((fmt_num(const, 6), []))
         for col, w in zip(cols.tolist(), weights.tolist()):
-            terms.append((f"{fmt_num(w, 6)}*{{0}}", [builder.ensure_u(int(col))]))
+            terms.append((f"{fmt_num(w, 4)}*{{0}}", [builder.ensure_u(int(col))]))
         if not terms:
             continue
         builder.emit_chunked(

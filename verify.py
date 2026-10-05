@@ -54,6 +54,7 @@ class Oracle:
     blendshapes: list
     raw: np.ndarray | None = None
     psd: np.ndarray | None = None
+    extra: np.ndarray | None = None  # ML then RBF controls, after raw and PSD
     notes: list = field(default_factory=list)
 
 
@@ -62,9 +63,9 @@ def run_oracle(model: RigLogicModel, riglogic, reader, gui, raw_default, release
     # Same construction as Poly Hammer's rig_instance.py (default Configuration: Euler joint outputs)
     manager = riglogic.RigLogic(reader, riglogic.Configuration(), None)
     instance = riglogic.RigInstance(rigLogic=manager, memRes=None)
-    joint_outputs, blendshape_outputs, raw_values, psd_values = [], [], [], []
+    joint_outputs, blendshape_outputs, raw_values, psd_values, extra_values = [], [], [], [], []
     notes = []
-    raw_ok = psd_ok = True
+    raw_ok = psd_ok = extra_ok = True
     try:
         for s in range(gui.shape[0]):
             for control in model.gui:
@@ -90,6 +91,15 @@ def run_oracle(model: RigLogicModel, riglogic, reader, gui, raw_default, release
                 except Exception as error:  # noqa: BLE001
                     psd_ok = False
                     notes.append(f"getPSDControl unavailable: {error}")
+            if extra_ok and (model.ml_count or model.rbf_count):
+                try:
+                    extra_values.append(
+                        [float(instance.getMLControl(i)) for i in range(model.ml_count)]
+                        + [float(instance.getRBFControl(i)) for i in range(model.rbf_count)]
+                    )
+                except Exception as error:  # noqa: BLE001
+                    extra_ok = False
+                    notes.append(f"ML/RBF control values unavailable: {error}")
     finally:
         if release is not None:
             release(instance)
@@ -99,6 +109,7 @@ def run_oracle(model: RigLogicModel, riglogic, reader, gui, raw_default, release
         blendshapes=blendshape_outputs,
         raw=np.asarray(raw_values) if raw_ok and raw_values else None,
         psd=np.asarray(psd_values) if psd_ok and psd_values else None,
+        extra=np.asarray(extra_values) if extra_ok and extra_values else None,
         notes=notes,
     )
 
@@ -169,6 +180,10 @@ def fit_psd_modes(model: RigLogicModel, oracle: Oracle):
     if oracle.raw is None or oracle.psd is None:
         return None
     u_oracle = np.concatenate([oracle.raw, oracle.psd], axis=1)
+    if model.ml_count or model.rbf_count:
+        if oracle.extra is None:
+            return None  # Fall back to explicit candidates, never invent oracle inputs.
+        u_oracle = np.concatenate([u_oracle, oracle.extra], axis=1)
     best = None
     for swap in (False, True):
         for base in sorted({0, model.raw_count}):
@@ -216,6 +231,7 @@ def verify_model(model: RigLogicModel, riglogic, reader, release=None) -> Verify
     details = result.details
     details.append(
         f"Rig: {len(model.gui)} GUI controls, {model.raw_count} raw, {model.psd_count} PSD, "
+        f"{model.ml_count} ML, {model.rbf_count} RBF controls, "
         f"{model.joint_count} joints, {int((model.matrix != 0).sum())} joint weights, "
         f"{model.g2r_in.size} GUI-to-raw rows, {model.psd_rows.size} PSD entries, "
         f"{len(model.quat_inputs)} quaternion inputs, {len(model.rbf_joints)} RBF-written joints"
