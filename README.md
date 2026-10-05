@@ -1,4 +1,4 @@
-# MetaMorphosis 1.0.5 (Blender 5.0+)
+# MetaMorphosis 1.0.6 (Blender 5.0+)
 
 Imports a MetaHuman head DNA (head, eyes, teeth, ... one object + material slot each, original facial
 deformation rig, face board with widgets) and bakes RigLogic into native Blender drivers.
@@ -13,6 +13,28 @@ Use: File > Import > MetaHuman Head DNA (MetaMorphosis), or the MetaMorphosis ta
 
 Lite is the only import and rebuild mode. It retains the existing Lite settings, with no combination correctives.
 Details of every import are in the text block "MetaMorphosis Report".
+
+Changes in 1.0.6
+- Remove All sits beside Import DNA. It removes MetaMorphosis imports from the current scene,
+  including the head, armatures, face board, widgets and RigLogic helpers, plus unused imported data.
+  A confirmation dialog identifies the scope; Blender Undo can restore the removal.
+- New imports carry persistent ownership tags, so renaming or moving imported objects does not
+  prevent cleanup. Rebuilt helper objects retain ownership. Partial imports can also be removed.
+  Unrelated objects (even inside imported collections), shared data and objects used in other scenes
+  are preserved. Legacy imports are identified through their rig, mesh, board and widget references;
+  unidentifiable legacy extras are preserved rather than guessed at. No global orphan purge is used.
+  Legacy characters previously joined with an external body rig are preserved and require manual removal,
+  because deleting the combined armature would also delete the external body's bones.
+- Removed the Combine Body Rig feature and its settings. Previously combined rigs remain intact.
+- Removed blendshape import: new imports contain geometry, skinning and bone-driven expressions,
+  without DNA shape keys. Existing shape keys in older scenes are not deleted by updating the add-on;
+  rebuilding those scenes continues to support their existing drivers.
+- Simplified the sidebar with adjacent import/removal controls, rig status, grouped controls and
+  a collapsible Diagnostics panel. Panel headers and controls have icons; Blender's vertical sidebar
+  category tabs remain text-only.
+- Tested real MH_BASE and Ada imports with joined/separate face boards in Blender 5.0 and 5.2,
+  including save/reopen, middle-eye motion, no newly imported shape keys and complete owned-object cleanup.
+  Additional tests cover unrelated objects, shared materials/scenes, renamed objects and partial imports.
 
 Changes in 1.0.5
 - Fixed "Joint group 1 references indices outside of the rig" on the supplied UE 5.7 MH_BASE.dna.
@@ -54,20 +76,6 @@ Changes in 1.0.3
   Existing rigs can use this storage through Rebuild Drivers.
 - The speed measurement also supports a separate face board and restores its controls after measuring.
 
-Combine a body rig
-1. Align the body and head in their rest poses before combining, and select the MetaMorphosis head rig.
-2. In the MetaMorphosis sidebar, choose Body Rig and its Attach to Bone (normally the body's head bone).
-3. Press Combine Body with Head Rig. The original head skeleton roots follow the chosen body bone.
-   This joins the armatures; it does not weld meshes or automatically retarget differently shaped skeletons.
-
-The head rig remains the active armature. Duplicate body bone names receive a BODY_ prefix;
-body skin weights, bone parents, bone constraints and drivers are retained. Imported body bones
-also belong to DEF_BODY. Rebuild/Enable/Disable affect only the original head's shape keys and drivers.
-Use Undo immediately to undo a combine operation. Combine before adding body actions or NLA tracks;
-the operator rejects those because Blender's join would discard them. Linked/shared armatures,
-conflicting custom properties, body object constraints/parents, and object-transform drivers must
-be resolved before joining. The head's existing animation is retained.
-
 Performance and verification
 The requested 3–6 ms target was not reached. On the supplied Ada scene in Blender 5.2, the
 original and updated rigs both measured about 27 ms per update (Lite, the scene's saved quality).
@@ -78,5 +86,4 @@ The 1.0.3 release's Ada DNA imports with joined and separate boards, bone/scene 
 drivers, corrective shape drivers, body joins and extension registration were tested in Blender 5.0;
 additional native-driver and body-join checks were run in Blender 5.2.
 
-The archive still requires your existing face_board.blend and platform-matched bindings as described
-above; they have not been replaced or bundled. Existing scenes are not automatically reorganized.
+The add-on requires face_board.blend and platform-matched bindings as described above. Existing scenes are not automatically reorganized.

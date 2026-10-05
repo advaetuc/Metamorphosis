@@ -35,6 +35,8 @@ def create_data_object(collection: bpy.types.Collection, prefix: str, index: int
     """An empty that stores baked helper values. It is tiny, unselectable and must stay in the file."""
     name = f"{prefix}_{DATA_OBJECT_NAME}_{index:02d}".upper()
     empty = bpy.data.objects.new(name, None)
+    if collection.get("mm_import_id"):
+        empty["mm_import_id"] = collection["mm_import_id"]
     empty.empty_display_type = "PLAIN_AXES"
     empty.empty_display_size = 0.001
     empty.hide_select = True

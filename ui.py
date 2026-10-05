@@ -13,37 +13,57 @@ class MM_PT_panel(bpy.types.Panel):
     bl_region_type = "UI"
     bl_category = LABEL
 
+    def draw_header(self, context):
+        self.layout.label(text="", icon="ARMATURE_DATA")
+
     def draw(self, context):
         layout = self.layout
-        layout.operator("metamorphosis.import_dna", icon="IMPORT")
+        row = layout.row(align=True)
+        row.scale_y = 1.25
+        row.operator("metamorphosis.import_dna", text="Import DNA", icon="IMPORT")
+        row.operator("metamorphosis.remove_all", text="Remove All", icon="TRASH")
 
         rig = bake.find_baked_rig(context)
-        box = layout.box()
         if rig is None:
-            box.label(text="No baked rig in this scene", icon="INFO")
+            layout.label(text="Import a DNA file to get started.", icon="INFO")
             return
+        box = layout.box()
         box.label(text=rig.name, icon="ARMATURE_DATA")
-        row = box.row(align=True)
+        box.label(text=f"Native drivers · {rig.get('mm_quality', 'LITE').title()}", icon="DRIVER")
+        if rig.get("mm_stats"):
+            for part in str(rig["mm_stats"]).split(", "):
+                box.label(text=part)
+        layout.separator()
+        layout.label(text="Rig Controls", icon="POSE_HLT")
+        row = layout.row(align=True)
         op = row.operator("metamorphosis.toggle_rig", text="Enable", icon="PLAY")
         op.enable = True
         op = row.operator("metamorphosis.toggle_rig", text="Disable", icon="PAUSE")
         op.enable = False
-        stats = rig.get("mm_stats")
-        if stats:
-            box.label(text=f"{rig.get('mm_quality', '?').title()}: {stats}")
-        box.operator("metamorphosis.rebuild", icon="FILE_REFRESH")
-        box.operator("metamorphosis.validate", icon="CHECKMARK")
-        box.operator("metamorphosis.benchmark", icon="TIME")
-        body_box = layout.box()
-        body_box.label(text="Combine Body Rig", icon="ARMATURE_DATA")
-        settings = context.scene.mm_body_settings
-        body_box.prop(settings, "body")
-        if settings.body:
-            body_box.prop_search(settings, "attach_bone", settings.body.data, "bones")
-        body_box.label(text="Align rest poses before combining.")
-        body_box.operator("metamorphosis.combine_body")
+        layout.operator("metamorphosis.rebuild", icon="FILE_REFRESH")
+
+
+class MM_PT_diagnostics(bpy.types.Panel):
+    bl_label = "Diagnostics"
+    bl_idname = "MM_PT_diagnostics"
+    bl_parent_id = "MM_PT_panel"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = LABEL
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw_header(self, context):
+        self.layout.label(text="", icon="TOOL_SETTINGS")
+
+    def draw(self, context):
+        layout = self.layout
+        col = layout.column(align=True)
+        col.enabled = bake.find_baked_rig(context) is not None
+        col.operator("metamorphosis.validate", text="Check Drivers", icon="CHECKMARK")
+        col.operator("metamorphosis.benchmark", text="Measure Speed", icon="TIME")
         if bpy.data.texts.get("MetaMorphosis Report"):
-            box.label(text="Details: Text Editor > MetaMorphosis Report")
+            layout.separator()
+            layout.label(text="Text Editor → MetaMorphosis Report", icon="TEXT")
 
 
-CLASSES = (MM_PT_panel,)
+CLASSES = (MM_PT_panel, MM_PT_diagnostics)

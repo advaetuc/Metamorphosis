@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "metamorphosis"
-version = "1.0.5"
+version = "1.0.6"
 name = "MetaMorphosis"
 tagline = "MetaHuman head DNA import with RigLogic baked into drivers"
 maintainer = "MetaMorphosis <noreply@example.com>"
@@ -21,4 +21,7 @@ files = "Read MetaHuman .dna files and the face board .blend file"
 paths_exclude_pattern = [
   "__pycache__/",
   "*.pyc",
+  "work/",
+  "tests/",
+  "AGENTS.md",
 ]

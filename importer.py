@@ -1,6 +1,6 @@
 """Import the head meshes and the original facial deformation rig from a MetaHuman head DNA.
 
-Only geometry, skinning, shape keys and the skeleton are created. No textures, no node trees, no
+Only geometry, skinning and the skeleton are created. No textures, no node trees, no
 wrinkle-map logic. Every DNA mesh becomes one object with exactly one (empty) material slot, which is
 how MetaHuman splits meshes by material (head, teeth, saliva, eyeLeft, eyeRight, eyeshell, eyelashes ...).
 """
@@ -34,7 +34,6 @@ class ImportOptions:
     scale: float = 0.01
     lod: int = 0
     prefix: str = "MetaHuman"
-    shape_keys: bool = True
     rotation_degrees: bool = True
 
 
@@ -43,7 +42,6 @@ class ImportResult:
     rig: bpy.types.Object
     meshes: list = field(default_factory=list)
     collection: bpy.types.Collection | None = None
-    shape_key_map: dict = field(default_factory=dict)  # channel index -> [(Key datablock, block name)]
     warnings: list = field(default_factory=list)
     prefix: str = ""
 
@@ -211,42 +209,8 @@ def _create_mesh(
     modifier = obj.modifiers.new(name="Armature", type="ARMATURE")
     modifier.object = rig
 
-    if options.shape_keys:
-        _create_shape_keys(reader, mesh_index, obj, options, result)
     return obj
 
-
-def _create_shape_keys(reader, mesh_index: int, obj: bpy.types.Object, options: ImportOptions, result) -> None:
-    target_count = reader.getBlendShapeTargetCount(mesh_index)
-    if target_count == 0:
-        return
-    basis = obj.shape_key_add(name="Basis", from_mix=False)
-    vertex_count = len(basis.data)
-    base = np.empty(vertex_count * 3, np.float32)
-    basis.data.foreach_get("co", base)
-    base = base.reshape(-1, 3)
-    key = obj.data.shape_keys
-
-    for target in range(target_count):
-        channel = reader.getBlendShapeChannelIndex(mesh_index, target)
-        name = str(reader.getBlendShapeChannelName(channel))
-        indices = np.asarray(reader.getBlendShapeTargetVertexIndices(mesh_index, target), np.int64)
-        block = obj.shape_key_add(name=name, from_mix=False)
-        block.value = 0.0
-        if indices.size:
-            deltas = _to_blender(
-                np.asarray(reader.getBlendShapeTargetDeltaXs(mesh_index, target), np.float64),
-                np.asarray(reader.getBlendShapeTargetDeltaYs(mesh_index, target), np.float64),
-                np.asarray(reader.getBlendShapeTargetDeltaZs(mesh_index, target), np.float64),
-                options.scale,
-            )
-            valid = indices < vertex_count
-            if not valid.all():
-                result.warnings.append(f"{obj.name}: shape '{name}' references vertices that do not exist")
-            shaped = base.copy()
-            shaped[indices[valid]] += deltas[valid].astype(np.float32)
-            block.data.foreach_set("co", shaped.ravel())
-        result.shape_key_map.setdefault(int(channel), []).append((key, block.name))
 
 
 def import_head(reader, options: ImportOptions) -> ImportResult:

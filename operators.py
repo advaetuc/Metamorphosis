@@ -11,7 +11,7 @@ import bpy
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, FloatVectorProperty, IntProperty, StringProperty
 from bpy_extras.io_utils import ImportHelper
 
-from . import bake, bakeplan, dnaio, faceboard, importer, organization, pipeline, verify
+from . import bake, bakeplan, cleanup, dnaio, faceboard, importer, organization, pipeline, verify
 from .constants import ADDON_ID, LABEL
 from .logicmodel import RigLogicModel
 
@@ -43,10 +43,6 @@ class MM_OT_import_dna(bpy.types.Operator, ImportHelper):
         description="DNA files are in centimetres; 0.01 gives metres",
     )
     lod: IntProperty(name="LOD", default=0, min=0, max=7, description="Level of detail to import")  # type: ignore[valid-type]
-    import_shape_keys: BoolProperty(  # type: ignore[valid-type]
-        name="Corrective Shape Keys", default=True,
-        description="Import the DNA blend shapes and drive them with the baked rig",
-    )
     join_face_board: BoolProperty(  # type: ignore[valid-type]
         name="Join Face Board", default=True,
         description="Merge the face board into the face rig armature (one editable armature)",
@@ -70,7 +66,6 @@ class MM_OT_import_dna(bpy.types.Operator, ImportHelper):
         layout.prop(self, "character_name")
         layout.prop(self, "scale")
         layout.prop(self, "lod")
-        layout.prop(self, "import_shape_keys")
         layout.prop(self, "quality")
         box = layout.box()
         box.prop(self, "join_face_board")
@@ -103,6 +98,8 @@ class MM_OT_import_dna(bpy.types.Operator, ImportHelper):
 
         dna_path = Path(self.filepath)
         reader = None
+        import_snapshot = None
+        import_token = cleanup.new_token()
         wm.progress_begin(0, 100)
         started = time.perf_counter()
         try:
@@ -134,10 +131,11 @@ class MM_OT_import_dna(bpy.types.Operator, ImportHelper):
             report_lines += [f"Note: {w}" for w in model.warnings]
 
             # ---- 2. meshes + rig
+            import_snapshot = cleanup.snapshot()
             wm.progress_update(15)
             prefix = importer.unique_prefix(self.character_name.strip() or dna_path.stem)
             options = importer.ImportOptions(
-                scale=self.scale, lod=self.lod, prefix=prefix, shape_keys=self.import_shape_keys,
+                scale=self.scale, lod=self.lod, prefix=prefix,
                 rotation_degrees=rotation_degrees,
             )
             imported = importer.import_head(reader, options)
@@ -171,7 +169,7 @@ class MM_OT_import_dna(bpy.types.Operator, ImportHelper):
                 rig=imported.rig,
                 board_object=board_object,
                 board_bone_names=board_bone_names,
-                shape_key_map=imported.shape_key_map if self.import_shape_keys else {},
+                shape_key_map={},
                 meshes=imported.meshes,
                 collection=imported.collection,
                 prefix=prefix,
@@ -190,6 +188,8 @@ class MM_OT_import_dna(bpy.types.Operator, ImportHelper):
             self.report({"ERROR"}, f"Import failed: {error}")
             return {"CANCELLED"}
         finally:
+            if import_snapshot is not None:
+                cleanup.mark_created(import_snapshot, import_token)
             if reader is not None:
                 dnaio.release_handle(reader)
             wm.progress_end()
@@ -212,6 +212,31 @@ def _stats_lines(plan, stats) -> list:
     if stats["variables"] > 150_000:
         lines.append("  Large rig: viewport speed also depends on mesh complexity and scene settings.")
     return lines
+
+
+class MM_OT_remove_all(bpy.types.Operator):
+    """Remove all MetaMorphosis imports in this scene; preserve unrelated and shared content"""
+
+    bl_idname = "metamorphosis.remove_all"
+    bl_label = "Remove All"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        objects, collections, _ = cleanup.targets(context.scene)
+        return bool(objects or collections)
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_confirm(
+            self, event, title="Remove all MetaMorphosis imports?",
+            message="Removes imported characters from this scene. Unrelated objects are kept.",
+            confirm_text="Remove All", icon="WARNING",
+        )
+
+    def execute(self, context):
+        count = cleanup.remove_all(context)
+        self.report({"INFO"}, f"Removed {count} imported objects; unrelated/shared content preserved")
+        return {"FINISHED"}
 
 
 class MM_OT_rebuild(bpy.types.Operator):
@@ -397,5 +422,5 @@ def menu_import(self, _context):
     self.layout.operator(MM_OT_import_dna.bl_idname, text="MetaHuman Head DNA (MetaMorphosis)")
 
 
-CLASSES = (MM_OT_import_dna, MM_OT_rebuild, MM_OT_toggle_rig, MM_OT_benchmark, MM_OT_validate, MM_OT_test_bindings)
+CLASSES = (MM_OT_import_dna, MM_OT_remove_all, MM_OT_rebuild, MM_OT_toggle_rig, MM_OT_benchmark, MM_OT_validate, MM_OT_test_bindings)
 __all__ = ["CLASSES", "LABEL", "menu_import", "get_preferences"]
