@@ -1,4 +1,4 @@
-# MetaMorphosis 1.0.6 (Blender 5.0+)
+# MetaMorphosis 1.0.7 (Blender 5.0+)
 
 Imports a MetaHuman head DNA (head, eyes, teeth, ... one object + material slot each, original facial
 deformation rig, face board with widgets) and bakes RigLogic into native Blender drivers.
@@ -11,8 +11,23 @@ Setup (one time)
 
 Use: File > Import > MetaHuman Head DNA (MetaMorphosis), or the MetaMorphosis tab in the sidebar.
 
-Lite is the only import and rebuild mode. It retains the existing Lite settings, with no combination correctives.
+Lite is the only import and rebuild mode. It retains primary expressions and the combination
+correctives required by the four Lips Together controls; other combination correctives remain omitted.
 Details of every import are in the text block "MetaMorphosis Report".
+
+Changes in 1.0.7
+- Fixed all four Lips Together face-board controls. Their motion is stored in DNA as combinations
+  with jaw movement, so dropping every combination in Lite had left these controls disconnected.
+  Lite now retains their jaw-opening, sideways-jaw and mouth-press combinations.
+- Existing primary-expression pruning is unchanged. Lip closure uses the DNA's joint weights,
+  native drivers and existing bone skinning; no shape keys or extra quality modes are added.
+- For existing scenes, select the imported head rig and press Rebuild Drivers after loading this
+  update. New imports receive the fix automatically. Open the jaw, then raise the four Lips Together
+  controls to bring the lips together while keeping the jaw open.
+- Regression tests compare individual and combined lip movement against native RigLogic on
+  Ada, MH_BASE and Taro, and check that other Lite expressions are unchanged with these controls at zero.
+  Imports and rebuilds also pass in Blender 5.0 (MH_BASE, joined board) and 5.2 (Ada, separate board),
+  including mesh movement from each control, valid native drivers and save/reopen with the add-on unregistered.
 
 Changes in 1.0.6
 - Remove All sits beside Import DNA. It removes MetaMorphosis imports from the current scene,

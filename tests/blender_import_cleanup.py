@@ -34,6 +34,31 @@ bpy.context.view_layer.update()
 for name,matrix in zip(('FACIAL_L_Eye','FACIAL_R_Eye'),old):
     assert max(abs(a-b) for ra,rb in zip(matrix,rig.pose.bones[name].matrix) for a,b in zip(ra,rb))>1e-3
 
+def check_lips():
+    rig=bake.find_baked_rig(bpy.context)
+    board=bpy.data.objects[rig[bake.RIG_KEY_BOARD_OBJECT]]
+    controls=[f'CTRL_{side}_mouth_lipsTogether{part}' for side in ('L','R') for part in ('U','D')]
+    for n in rig[bake.RIG_KEY_BOARD].split('\n'):
+        if n.startswith('CTRL_'):board.pose.bones[n].location=(0,0,0)
+    board.pose.bones['CTRL_C_jaw'].location.y=.7
+    def vertices():
+        bpy.context.view_layer.update()
+        graph=bpy.context.evaluated_depsgraph_get()
+        return [v.co.copy() for mesh in bake.head_meshes(rig)
+                for v in mesh.evaluated_get(graph).data.vertices]
+    opened=vertices()
+    for names in [[c] for c in controls]+[controls]:
+        for c in controls:board.pose.bones[c].location.y=1 if c in names else 0
+        moved=vertices()
+        assert max((a-b).length for a,b in zip(opened,moved))>1e-4,names
+    info=bake.validate_rig(rig)
+    assert not info['invalid'] and not info['needs_python'],info
+    return moved
+
+check_lips()
+assert bpy.ops.metamorphosis.rebuild()=={'FINISHED'}
+expected=check_lips()
+
 # Exercise panel code and ensure every icon and operator identifier is valid.
 icons=set(bpy.types.UILayout.bl_rna.functions['label'].parameters['icon'].enum_items.keys())
 class Layout:
@@ -54,7 +79,11 @@ for panel in ui.CLASSES:
 output=ROOT/'work'/('cleanup_separate.blend' if 'separate' in args else 'cleanup_joined.blend')
 output.parent.mkdir(exist_ok=True)
 bpy.ops.wm.save_as_mainfile(filepath=str(output))
+addon.unregister()
 bpy.ops.wm.open_mainfile(filepath=str(output))
+actual=check_lips()
+assert max((a-b).length for a,b in zip(expected,actual))<1e-6
+addon.register()
 assert bpy.ops.metamorphosis.remove_all()=={'FINISHED'}
 assert {o.name for o in bpy.data.objects}==before,sorted(o.name for o in bpy.data.objects if o.name not in before)
 assert not [o for o in bpy.data.collections if o.get(cleanup.OWNER)]

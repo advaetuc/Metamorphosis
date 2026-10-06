@@ -275,6 +275,25 @@ def _keep_within_budget(row: np.ndarray, eps: float) -> np.ndarray:
     return np.sort(nonzero[order[dropped:]])
 
 
+def lips_together_columns(model: RigLogicModel, variant: Variant) -> set[int]:
+    """Joint correctives driven by the four Lips Together raw controls.
+
+    These controls have no direct joint weights in MetaHuman DNA: their primary
+    action is encoded as PSD combinations with jaw motion (and mouth press).
+    Discover columns from names/dependencies, since DNA control indices vary.
+    """
+    names = {f"mouthLipsTogether{side}" for side in ("UL", "UR", "DL", "DR")}
+    seeds = {i for i, name in enumerate(model.raw_names) if name.rsplit(".", 1)[-1] in names}
+    dependent = set(seeds)
+    groups = model.psd_groups(variant.psd_row_base, variant.swap) or []
+    while True:
+        added = {model.raw_count + k for k, cols, _weights in groups
+                 if any(int(col) in dependent for col in cols)} - dependent
+        if not added:
+            return dependent - seeds
+        dependent.update(added)
+
+
 def build_plan(
     model: RigLogicModel,
     variant: Variant,
@@ -296,7 +315,8 @@ def build_plan(
         budget: per attribute type (translation m, rotation rad, scale) the largest total error that may be
             dropped from one channel. Weights are removed smallest-first while the sum of the removed
             absolute weights stays within the budget (worst case, with every control at 1.0).
-        use_psd: ``False`` drops the combination correctives (PSD) entirely ("Lite").
+        use_psd: ``False`` drops combination correctives except those required by
+            the four Lips Together controls ("Lite").
         face_board_bones: names of the face-board bones that exist; ``None`` means "assume all".
         shape_channels: blend shape channel indices that exist as shape keys in Blender.
         skip_bones: bones that must not be driven (RigLogic inputs, i.e. the quaternion bones).
@@ -311,9 +331,13 @@ def build_plan(
         raise ValueError("The PSD table is not valid for the selected interpretation")
     u0 = u0[0]
     matrix = model.matrix.astype(np.float64)
+    lip_columns = lips_together_columns(model, variant) if not use_psd else set()
     if not use_psd:
         matrix = matrix.copy()
         matrix[:, model.raw_count :] = 0.0
+        if lip_columns:
+            cols = sorted(lip_columns)
+            matrix[:, cols] = model.matrix[:, cols]
     base = matrix @ u0  # outputs at the neutral pose (should be ~0)
 
     angle_factor = math.pi / 180.0 if rotation_degrees else 1.0
@@ -339,7 +363,15 @@ def build_plan(
         base_combined[6:9] = base_block[6:9]
         for a in range(9):
             row = combined[a]
-            keep = _keep_within_budget(row, budget[a // 3])
+            if not use_psd:
+                # Preserve the existing Lite pruning of primary expressions.
+                # Lip closure weights must not spend that budget or be removed.
+                keep = np.concatenate((
+                    _keep_within_budget(row[:model.raw_count], budget[a // 3]),
+                    np.flatnonzero(row[model.raw_count:]) + model.raw_count,
+                ))
+            else:
+                keep = _keep_within_budget(row, budget[a // 3])
             pruned_terms += int(np.count_nonzero(row)) - keep.size
             const = -float(base_combined[a])
             if a >= 6:
@@ -372,7 +404,8 @@ def build_plan(
         if abs(const) > 1e-9:
             terms.append((fmt_num(const, 6), []))
         for col, w in zip(cols.tolist(), weights.tolist()):
-            terms.append((f"{fmt_num(w, 4)}*{{0}}", [builder.ensure_u(int(col))]))
+            precision = 6 if col in lip_columns else 4
+            terms.append((f"{fmt_num(w, precision)}*{{0}}", [builder.ensure_u(int(col))]))
         if not terms:
             continue
         builder.emit_chunked(
@@ -393,6 +426,7 @@ def build_plan(
         "shape_channels": len(plan.shape_props),
         "quat_bones": len(plan.quat_bones),
         "gui_controls": len(builder.gui_nodes_done),
+        "lips_together_correctives": len(lip_columns & needed_cols),
     }
     return plan
 
