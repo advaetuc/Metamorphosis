@@ -1,4 +1,4 @@
-# MetaMorphosis 1.0.7 (Blender 5.0+)
+# MetaMorphosis 1.0.8 (Blender 5.0+)
 
 Imports a MetaHuman head DNA (head, eyes, teeth, ... one object + material slot each, original facial
 deformation rig, face board with widgets) and bakes RigLogic into native Blender drivers.
@@ -12,8 +12,19 @@ Setup (one time)
 Use: File > Import > MetaHuman Head DNA (MetaMorphosis), or the MetaMorphosis tab in the sidebar.
 
 Lite is the only import and rebuild mode. It retains primary expressions and the combination
-correctives required by the four Lips Together controls; other combination correctives remain omitted.
+correctives required by Lips Together and Jaw Open Extreme; other combination correctives remain omitted.
 Details of every import are in the text block "MetaMorphosis Report".
+
+Changes in 1.0.8
+- Fixed the Jaw Open Extreme face-board control by retaining its DNA joint correctives, including
+  combinations with other mouth expressions. These combinations were previously omitted by Lite.
+- Open the regular jaw control first, then raise Jaw Open Extreme to extend the opening. This
+  follows the DNA's behavior: Extreme has no effect while the regular jaw is fully closed.
+- The Lips Together fix and existing Lite primary-expression settings are preserved. Existing
+  scenes receive this fix by selecting the head rig and pressing Rebuild Drivers after loading the update.
+- Checked 108 poses per DNA against native RigLogic on Ada, MH_BASE and Taro. Import/rebuild tests
+  pass in Blender 5.0 and 5.2 with joined/separate face boards, including mesh movement, valid native
+  drivers, the previous eye/lip fixes and save/reopen with the add-on unregistered.
 
 Changes in 1.0.7
 - Fixed all four Lips Together face-board controls. Their motion is stored in DNA as combinations

@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "metamorphosis"
-version = "1.0.7"
+version = "1.0.8"
 name = "MetaMorphosis"
 tagline = "MetaHuman head DNA import with RigLogic baked into drivers"
 maintainer = "MetaMorphosis <noreply@example.com>"

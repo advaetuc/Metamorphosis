@@ -1,4 +1,4 @@
-"""Native RigLogic regression: Blender --background --python this_file -- DNA [DNA ...]."""
+"""Lips Together / Jaw Open Extreme: Blender --background --python this_file -- DNA [DNA ...]."""
 import copy
 import importlib.util
 from pathlib import Path
@@ -41,6 +41,8 @@ for filename in sys.argv[sys.argv.index("--") + 1:]:
     plan = bakeplan.build_plan(model, result.variant, orientation, **kwargs)
     optimize.optimize_plan(plan)
     assert plan.stats["lips_together_correctives"] == 24, plan.stats
+    assert plan.stats["jaw_open_extreme_correctives"] == 31, plan.stats
+    extreme = next(c for c in model.gui if c.name == "CTRL_C_jaw_openExtreme.ty")
     lips = [c for c in model.gui if "lipsTogether" in c.bone]
     assert len(lips) == 4
     assert all(any(v.kind == "loc" and v.ref == c.bone for n in plan.nodes for v in n.vars) for c in lips)
@@ -56,6 +58,7 @@ for filename in sys.argv[sys.argv.index("--") + 1:]:
     samples, _ = model.make_samples()
     samples = samples[:model.FACE_ONLY_SAMPLES]
     samples[:, [c.index for c in lips]] = 0
+    samples[:, extreme.index] = 0
     jaw = next(c for c in model.gui if c.name == "CTRL_C_jaw.ty")
     # Individual quarters and all four together, at partial/full jaw opening.
     poses = []
@@ -73,6 +76,22 @@ for filename in sys.argv[sys.argv.index("--") + 1:]:
         pose = pose.copy()
         for i, c in enumerate(lips):
             pose[c.index] = (i + 1) / 4
+        poses.append(pose)
+    jaw_start = len(poses)
+    for opening in (0.0, .25, .6, 1.0):
+        for strength in (.25, .6, 1.0):
+            pose = np.zeros(len(model.gui))
+            pose[jaw.index] = opening
+            poses.append(pose.copy())
+            pose[extreme.index] = strength
+            poses.append(pose)
+    # Jaw/mouth combinations, including Lips Together, must match native RigLogic.
+    mixed, _ = model.make_samples()
+    for pose in mixed[1:model.FACE_ONLY_SAMPLES]:
+        pose = pose.copy()
+        pose[extreme.index] = 0
+        poses.append(pose.copy())
+        pose[extreme.index] = .8
         poses.append(pose)
     gui = np.array(poses)
     raw = np.tile(model.default_raw(), (len(gui), 1))
@@ -98,11 +117,29 @@ for filename in sys.argv[sys.argv.index("--") + 1:]:
             assert error < 2e-5, (filename, i, target, error)
         if i < 30:
             assert max(abs(on[t] - off[t]) for t in on) > 1e-4, (filename, i, "dead control")
+        if jaw_start <= i < jaw_start + 24:
+            motion = max(abs(on[t] - off[t]) for t in on)
+            if gui[i, jaw.index] > 0:
+                assert motion > 1e-4, (filename, i, "dead extreme jaw")
+            else:
+                assert motion < 1e-10, (filename, i, "extreme must extend the regular jaw")
     for pose in samples:
         old, new = evaluate(pose, old_plan), evaluate(pose)
         for target in old.keys() | new.keys():
             neutral = 1.0 if target[2] == "scale" else 0.0
             assert abs(old.get(target, neutral) - new.get(target, neutral)) < 1e-10, target
+    # Compare against 1.0.7 with its Lips Together fix when Extreme is at zero.
+    previous = copy.copy(model)
+    previous.matrix = model.matrix.copy()
+    previous.matrix[:, sorted(bakeplan.jaw_open_extreme_columns(model, result.variant))] = 0
+    previous_plan = compile_plan(bakeplan.build_plan(previous, result.variant, orientation, **kwargs))
+    for pose in mixed[:model.FACE_ONLY_SAMPLES]:
+        pose = pose.copy()
+        pose[extreme.index] = 0
+        old, new = evaluate(pose, previous_plan), evaluate(pose)
+        for target in old.keys() | new.keys():
+            neutral = 1.0 if target[2] == "scale" else 0.0
+            assert abs(old.get(target, neutral) - new.get(target, neutral)) < 1e-10, target
     dnaio.release_handle(reader)
-    print("LIPS_TOGETHER_PASSED", filename, "poses", len(gui), "max_error", worst,
+    print("MOUTH_CONTROLS_PASSED", filename, "poses", len(gui), "max_error", worst,
           "drivers", plan.stats["nodes"], flush=True)

@@ -275,14 +275,8 @@ def _keep_within_budget(row: np.ndarray, eps: float) -> np.ndarray:
     return np.sort(nonzero[order[dropped:]])
 
 
-def lips_together_columns(model: RigLogicModel, variant: Variant) -> set[int]:
-    """Joint correctives driven by the four Lips Together raw controls.
-
-    These controls have no direct joint weights in MetaHuman DNA: their primary
-    action is encoded as PSD combinations with jaw motion (and mouth press).
-    Discover columns from names/dependencies, since DNA control indices vary.
-    """
-    names = {f"mouthLipsTogether{side}" for side in ("UL", "UR", "DL", "DR")}
+def _dependent_psd_columns(model: RigLogicModel, variant: Variant, names: set[str]) -> set[int]:
+    """Find PSD descendants of named raw controls without assuming DNA indices."""
     seeds = {i for i, name in enumerate(model.raw_names) if name.rsplit(".", 1)[-1] in names}
     dependent = set(seeds)
     groups = model.psd_groups(variant.psd_row_base, variant.swap) or []
@@ -292,6 +286,17 @@ def lips_together_columns(model: RigLogicModel, variant: Variant) -> set[int]:
         if not added:
             return dependent - seeds
         dependent.update(added)
+
+
+def lips_together_columns(model: RigLogicModel, variant: Variant) -> set[int]:
+    """Lips Together has no direct joint weights; retain its jaw/lip combinations."""
+    names = {f"mouthLipsTogether{side}" for side in ("UL", "UR", "DL", "DR")}
+    return _dependent_psd_columns(model, variant, names)
+
+
+def jaw_open_extreme_columns(model: RigLogicModel, variant: Variant) -> set[int]:
+    """Jaw Open Extreme extends jaw opening through PSD, including mouth combinations."""
+    return _dependent_psd_columns(model, variant, {"jawOpenExtreme"})
 
 
 def build_plan(
@@ -316,7 +321,7 @@ def build_plan(
             dropped from one channel. Weights are removed smallest-first while the sum of the removed
             absolute weights stays within the budget (worst case, with every control at 1.0).
         use_psd: ``False`` drops combination correctives except those required by
-            the four Lips Together controls ("Lite").
+            Lips Together and Jaw Open Extreme controls ("Lite").
         face_board_bones: names of the face-board bones that exist; ``None`` means "assume all".
         shape_channels: blend shape channel indices that exist as shape keys in Blender.
         skip_bones: bones that must not be driven (RigLogic inputs, i.e. the quaternion bones).
@@ -332,11 +337,13 @@ def build_plan(
     u0 = u0[0]
     matrix = model.matrix.astype(np.float64)
     lip_columns = lips_together_columns(model, variant) if not use_psd else set()
+    jaw_columns = jaw_open_extreme_columns(model, variant) if not use_psd else set()
+    retained_columns = lip_columns | jaw_columns
     if not use_psd:
         matrix = matrix.copy()
         matrix[:, model.raw_count :] = 0.0
-        if lip_columns:
-            cols = sorted(lip_columns)
+        if retained_columns:
+            cols = sorted(retained_columns)
             matrix[:, cols] = model.matrix[:, cols]
     base = matrix @ u0  # outputs at the neutral pose (should be ~0)
 
@@ -365,7 +372,7 @@ def build_plan(
             row = combined[a]
             if not use_psd:
                 # Preserve the existing Lite pruning of primary expressions.
-                # Lip closure weights must not spend that budget or be removed.
+                # Required mouth-control weights must not spend that budget or be removed.
                 keep = np.concatenate((
                     _keep_within_budget(row[:model.raw_count], budget[a // 3]),
                     np.flatnonzero(row[model.raw_count:]) + model.raw_count,
@@ -404,7 +411,7 @@ def build_plan(
         if abs(const) > 1e-9:
             terms.append((fmt_num(const, 6), []))
         for col, w in zip(cols.tolist(), weights.tolist()):
-            precision = 6 if col in lip_columns else 4
+            precision = 6 if col in retained_columns else 4
             terms.append((f"{fmt_num(w, precision)}*{{0}}", [builder.ensure_u(int(col))]))
         if not terms:
             continue
@@ -427,6 +434,7 @@ def build_plan(
         "quat_bones": len(plan.quat_bones),
         "gui_controls": len(builder.gui_nodes_done),
         "lips_together_correctives": len(lip_columns & needed_cols),
+        "jaw_open_extreme_correctives": len(jaw_columns & needed_cols),
     }
     return plan
 

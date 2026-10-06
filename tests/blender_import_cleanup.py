@@ -51,6 +51,14 @@ def check_lips():
         for c in controls:board.pose.bones[c].location.y=1 if c in names else 0
         moved=vertices()
         assert max((a-b).length for a,b in zip(opened,moved))>1e-4,names
+    # Extreme extends the open jaw, including when the Lips Together controls are used.
+    for lips_enabled in (False, True):
+        for c in controls:board.pose.bones[c].location.y=1 if lips_enabled else 0
+        board.pose.bones['CTRL_C_jaw_openExtreme'].location.y=0
+        normal=vertices()
+        board.pose.bones['CTRL_C_jaw_openExtreme'].location.y=1
+        moved=vertices()
+        assert max((a-b).length for a,b in zip(normal,moved))>1e-4,'Jaw Open Extreme'
     info=bake.validate_rig(rig)
     assert not info['invalid'] and not info['needs_python'],info
     return moved

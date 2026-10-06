@@ -12,7 +12,7 @@ QUALITY = {
     "LITE": ((3e-4, 1e-3, 5e-4), False),
 }
 QUALITY_ITEMS = [
-    ("LITE", "Lite", "Primary expressions and Lips Together jaw/lip closure; other combination correctives are left out"),
+    ("LITE", "Lite", "Primary expressions, Lips Together and Jaw Open Extreme; other combination correctives are left out"),
 ]
 
 
@@ -82,6 +82,8 @@ def run_bake(
     optimize.optimize_plan(plan)
     if plan.stats["lips_together_correctives"]:
         report.append("Lips Together: retained jaw/lip closure correctives for all four controls.")
+    if plan.stats["jaw_open_extreme_correctives"]:
+        report.append("Jaw Open Extreme: retained extreme jaw opening and its mouth combinations.")
     report.append(
         f"Lossless driver optimization: removed {plan.stats['optimized_drivers']} drivers "
         f"and {plan.stats['optimized_variables']} variables; quality settings unchanged."
