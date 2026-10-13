@@ -80,6 +80,7 @@ def run_bake(
         skip_bones=skip,
     )
     optimize.optimize_plan(plan)
+    report.append("Compact native expressions; scaled partial sums preserve small facial movements.")
     if plan.stats["lips_together_correctives"]:
         report.append("Lips Together: retained jaw/lip closure correctives for all four controls.")
     if plan.stats["jaw_open_extreme_correctives"]:

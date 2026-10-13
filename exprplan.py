@@ -19,14 +19,27 @@ from .constants import MAX_EXPRESSION_LENGTH
 
 
 def fmt_num(value: float, digits: int = 5) -> str:
-    """Format a float in plain positional notation (no exponent) with ``digits`` significant digits."""
+    """Round to ``digits`` significant digits, then choose an equivalent short spelling."""
     value = float(value)
     if value == 0.0:
         return "0"
     text = np.format_float_positional(value, precision=digits, unique=False, fractional=False, trim="-")
     if text in ("-0", ""):
         return "0"
-    return text
+    # Shorter spelling of the SAME rounded coefficient permits more terms per
+    # native expression. No weight or corrective is dropped to save drivers.
+    compact = format(float(text), ".15g").replace("e-0", "e-").replace("e+0", "e+")
+    if float(compact) != float(text):
+        compact = text
+    if text.startswith("0."):
+        text = text[1:]
+    elif text.startswith("-0."):
+        text = "-" + text[2:]
+    return min((text, compact), key=len)
+
+
+def variable_name(index):
+    return chr(ord('a') + index) if index < 26 else f"v{index}"
 
 
 def _join_signed(parts: list[str]) -> str:
@@ -69,7 +82,7 @@ def _plan(terms, joiner: str, max_len: int):
             local = []
             for key in keys:
                 if key not in trial:
-                    trial[key] = f"v{len(trial)}"
+                    trial[key] = variable_name(len(trial))
                 local.append(trial[key])
             text = template.format(*local)
             extra = len(text) + (0 if (not parts or (joiner == "+" and text.startswith("-"))) else 1)

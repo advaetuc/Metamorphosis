@@ -2,7 +2,7 @@
 
 import bpy
 
-from . import bake
+from . import bake, mocap
 from .constants import LABEL
 
 
@@ -66,4 +66,85 @@ class MM_PT_diagnostics(bpy.types.Panel):
             layout.label(text="Text Editor → MetaMorphosis Report", icon="TEXT")
 
 
-CLASSES = (MM_PT_panel, MM_PT_diagnostics)
+class MM_PT_live_link(bpy.types.Panel):
+    bl_label = "Live Link"
+    bl_idname = "MM_PT_live_link"
+    bl_parent_id = "MM_PT_panel"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = LABEL
+    bl_options = {'DEFAULT_CLOSED'}
+
+    def draw_header(self, context):
+        self.layout.label(text="", icon='OUTLINER_DATA_CAMERA')
+
+    def draw(self, context):
+        layout = self.layout
+        settings = context.scene.mm_capture
+        live = mocap._live
+        recording = bool(live and live['recording'])
+        col = layout.column()
+        col.enabled = not live and not mocap._job
+        col.prop(settings, 'target')
+        col.prop(settings, 'host')
+        col.prop(settings, 'port')
+        col.prop(settings, 'subject')
+        layout.label(text="Live Link Face: ARKit mode", icon='INFO')
+        layout.label(text="Set the phone's target to this PC's IP.")
+        layout.operator('metamorphosis.live_stop' if live else 'metamorphosis.live_start',
+                        icon='PAUSE' if live else 'PLAY')
+        layout.label(text=settings.status)
+        if settings.last_take:
+            layout.label(text=f"Last take: {settings.last_take}", icon='ACTION')
+        col = layout.column()
+        col.enabled = not recording
+        col.prop(settings, 'mirror')
+        col.prop(settings, 'gain')
+        col.prop(settings, 'smoothing')
+        col.prop(settings, 'extreme')
+        col.prop(settings, 'take_name')
+        col.prop(settings, 'end_mode')
+        row = layout.row(align=True)
+        row.enabled = bool(live)
+        row.operator('metamorphosis.record_stop' if recording else 'metamorphosis.record_start',
+                     icon='PAUSE' if recording else 'REC')
+        layout.label(text="New take · starts at the current frame")
+
+
+class MM_PT_video(bpy.types.Panel):
+    bl_label = "Video to Mocap"
+    bl_idname = "MM_PT_video"
+    bl_parent_id = "MM_PT_panel"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = LABEL
+    bl_options = {'DEFAULT_CLOSED'}
+
+    def draw_header(self, context):
+        self.layout.label(text="", icon='SEQUENCE')
+
+    def draw(self, context):
+        layout = self.layout
+        settings = context.scene.mm_capture
+        col = layout.column()
+        col.enabled = not mocap._job and not mocap._live
+        col.prop(settings, 'target')
+        col.prop(settings, 'video')
+        col.prop(settings, 'take_name')
+        col.prop(settings, 'mirror')
+        col.prop(settings, 'gain')
+        col.prop(settings, 'smoothing')
+        col.prop(settings, 'extreme')
+        col.operator('metamorphosis.video_process', icon='ACTION')
+        if mocap._job:
+            layout.operator('metamorphosis.video_cancel', icon='CANCEL')
+        layout.label(text=settings.video_status)
+        box = col.box()
+        box.label(text="One-time setup", icon='PREFERENCES')
+        box.operator('metamorphosis.video_setup', icon='IMPORT')
+        box.prop(settings, 'video_python')
+        box.prop(settings, 'video_folder')
+        layout.label(text="Videos are processed on this computer.")
+
+
+CLASSES = (MM_PT_panel, MM_PT_live_link, MM_PT_video, MM_PT_diagnostics)

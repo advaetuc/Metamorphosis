@@ -1,4 +1,4 @@
-# MetaMorphosis 1.0.8 (Blender 5.0+)
+# MetaMorphosis 1.0.9 (Blender 5.0+)
 
 Imports a MetaHuman head DNA (head, eyes, teeth, ... one object + material slot each, original facial
 deformation rig, face board with widgets) and bakes RigLogic into native Blender drivers.
@@ -14,6 +14,59 @@ Use: File > Import > MetaHuman Head DNA (MetaMorphosis), or the MetaMorphosis ta
 Lite is the only import and rebuild mode. It retains primary expressions and the combination
 correctives required by Lips Together and Jaw Open Extreme; other combination correctives remain omitted.
 Details of every import are in the text block "MetaMorphosis Report".
+
+Changes in 1.0.9 — Phase 1
+- Added Live Link and Video to Mocap panels. Both animate existing face-board bones, including
+  Lips Together, and bake editable native Blender actions. No shape keys are required.
+- Live Link receives Epic Live Link Face's ARKit UDP stream. Select the head rig, use port 11111,
+  set the phone's target to the computer's LAN IP, and select **Live Link (ARKit)** mode in the app.
+  Keep both devices on the same network and allow Blender through the local firewall if needed.
+  This is the ARKit stream, not MetaHuman Animator's newer streaming protocol.
+- Connect for preview, position the timeline, then press Start Recording. A three-second countdown
+  precedes recording from that frame. Stop Recording bakes a separate take. At Timeline End offers
+  Extend Timeline or Stop Keyframing; stopping at the end keeps live preview connected.
+  Recording uses packet timestamps rather than viewport speed. Each new action preserves the previous
+  action with a fake user; choose previous takes in Blender's Action Editor. Stop recording before
+  loading another file. Disconnect or disabling the add-on finishes an active take.
+- Expression Strength, Mirror Left / Right and Smoothing apply to facial capture. Extreme Jaw is
+  optional and defaults to zero; raising it adds the preserved extreme opening near full jaw opening.
+  Retargeting is a practical ARKit-to-MetaHuman mapping, not an exact reproduction of Apple's face mesh.
+  Capture covers facial expressions and eye gaze; head/body rotation is not captured in this phase.
+- Video to Mocap: press Install Video Tools once, choose an MP4/MOV or other OpenCV-readable video,
+  select the head rig and starting frame, then Process Video and Bake. Processing runs in a separate
+  process with progress and Cancel. One visible face is tracked; frames without a detected face go
+  neutral. Videos with no detected face produce an error and do not replace an action.
+  Video results are resampled to the scene frame rate and extend the timeline to fit.
+- Video setup downloads an isolated Python environment's packages and Google's Face Landmarker model
+  into Blender's user data folder. It does not install packages into Blender's own Python environment.
+  An optional Python Executable and Video Tools Folder allow an existing local installation.
+  The tested dependencies are MediaPipe 0.10.35 and OpenCV 4.13.0.92. Face processing runs locally;
+  MediaPipe's published binaries include usage telemetry, which its maintainers state excludes input
+  video/images ([maintainer explanation](https://github.com/google-ai-edge/mediapipe/issues/6291)).
+  Video tracking has no tongue-out coefficient and may be less accurate with occlusion or strong head turns.
+- Native driver expressions now use shorter equivalent coefficient and variable spellings, fitting
+  more terms into each expression. Corrective selection, coefficient precision and Lite pruning are
+  unchanged; existing scenes receive the optimization with Rebuild Drivers. Weighted helper sums use
+  larger internal units to avoid Blender zeroing tiny intermediate values; final bone channels retain
+  their original units. This also corrects small-motion errors in the previous helper calculations.
+- Measured on the supplied Ada rig in Blender 5.2: 17,119 → 12,961 drivers (24.3% fewer),
+  median update time 23.05 → 21.94 ms across five batches of mixed facial poses. The 7–15 ms target
+  was not reached; this measurement includes the imported head meshes and is not a claim about
+  the user's separate body/proxy scene. MH_BASE imports now have 14,115 drivers versus 18,616.
+- Tests cover malformed packets, UDP receive/stop/rebind, all 52 input mappings, countdown timing,
+  both timeline-end policies, preservation of previous actions, cancellation, and native playback.
+  The supplied video tracked 1,343/1,343 frames and baked successfully. A real iPhone connection
+  has not been tested here; Live Link protocol tests use locally generated ARKit packets.
+  The 108-pose RigLogic comparisons pass on Ada, MH_BASE and Taro, and native-driver checks confirm
+  reduced intermediate precision loss without changing which deformations Lite includes.
+
+Capture implementation references
+- The supplied Faceit and LiveLinkFace receiver files were used to understand packet layouts and
+  capture workflows. Their shape-key-dependent animation code is not installed or required.
+- [PyLiveLinkFace protocol](https://github.com/JimWest/PyLiveLinkFace),
+  [Epic's iOS facial capture guide](https://dev.epicgames.com/documentation/en-us/unreal-engine/recording-face-animation-on-ios-device-in-unreal-engine),
+  and [Google's Face Landmarker API](https://developers.google.com/edge/mediapipe/solutions/vision/face_landmarker/python).
+- Phase 2 material/texture setup is awaiting the separately promised files.
 
 Changes in 1.0.8
 - Fixed the Jaw Open Extreme face-board control by retaining its DNA joint correctives, including

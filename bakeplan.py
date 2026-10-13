@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .constants import ATTRS_PER_JOINT
-from .exprplan import fmt_num, plan_prod, plan_sum
+from .exprplan import fmt_num, plan_prod, plan_sum, variable_name
 from .logicmodel import RigLogicModel, Variant
 
 
@@ -102,26 +102,30 @@ class _Builder:
             expr = f"min({fmt_num(hi)},{expr})"
         return expr
 
-    def emit_chunked(self, terms, joiner: str, final_target, level: str, var_for_key, *, clamp=None):
+    def emit_chunked(self, terms, joiner: str, final_target, level: str, var_for_key, *, clamp=None, output_scale=1.0):
         """Emit nodes for ``terms`` (sum or product). Returns nothing; writes ``final_target``."""
         chunks = plan_sum(terms) if joiner == "+" else plan_prod(terms)
         if not chunks:
             return False
         if len(chunks) == 1:
             expr, keys = chunks[0]
-            variables = [var_for_key(f"v{i}", key) for i, key in enumerate(keys)]
+            if output_scale != 1.0:
+                expr = f"({expr})/{fmt_num(output_scale)}"
+            variables = [var_for_key(variable_name(i), key) for i, key in enumerate(keys)]
             self.add_node(final_target, "SCRIPTED", self._clamped(expr, clamp), variables, level)
             return True
         helper_vars = []
         for expr, keys in chunks:
             helper = self.new_helper()
-            variables = [var_for_key(f"v{i}", key) for i, key in enumerate(keys)]
+            variables = [var_for_key(variable_name(i), key) for i, key in enumerate(keys)]
             self.add_node(("prop", helper), "SCRIPTED", expr, variables, level + "-chunk")
             helper_vars.append(Var(f"h{len(helper_vars)}", "prop", helper))
-        if joiner == "+" and not clamp:
+        if joiner == "+" and not clamp and output_scale == 1.0:
             self.add_node(final_target, "SUM", "", helper_vars, level)
         else:
             joined = ("+" if joiner == "+" else "*").join(v.name for v in helper_vars)
+            if output_scale != 1.0:
+                joined = f"({joined})/{fmt_num(output_scale)}"
             self.add_node(final_target, "SCRIPTED", self._clamped(joined, clamp), helper_vars, level)
         return True
 
@@ -408,15 +412,22 @@ def build_plan(
     # then the bone channels
     for bone, path, index, cols, weights, const in channel_plans:
         terms = []
+        # Blender's native writes ignore tiny changes around 1e-4, including
+        # helper properties. Store weighted partial sums at larger magnitudes so
+        # repartitioning a sum does not discard sub-millimetre lip motion.
+        # Restore the original units only at the final bone channel.
+        output_scale = 10000.0
         if abs(const) > 1e-9:
-            terms.append((fmt_num(const, 6), []))
+            terms.append((fmt_num(float(fmt_num(const, 6)) * output_scale, 6), []))
         for col, w in zip(cols.tolist(), weights.tolist()):
             precision = 6 if col in retained_columns else 4
-            terms.append((f"{fmt_num(w, precision)}*{{0}}", [builder.ensure_u(int(col))]))
+            coefficient = fmt_num(float(fmt_num(w, precision)) * output_scale, precision)
+            terms.append((f"{coefficient}*{{0}}", [builder.ensure_u(int(col))]))
         if not terms:
             continue
         builder.emit_chunked(
-            terms, "+", ("bone", bone, path, index), "channel", lambda vn, key: Var(vn, "prop", key)
+            terms, "+", ("bone", bone, path, index), "channel", lambda vn, key: Var(vn, "prop", key),
+            output_scale=output_scale,
         )
         plan.euler_bones.add(bone)
 
