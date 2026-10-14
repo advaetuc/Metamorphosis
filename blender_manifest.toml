@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "metamorphosis"
-version = "1.0.9"
+version = "1.0.10"
 name = "MetaMorphosis"
 tagline = "MetaHuman head DNA import with RigLogic baked into drivers"
 maintainer = "MetaMorphosis <noreply@example.com>"
@@ -15,7 +15,7 @@ copyright = ["2026 MetaMorphosis authors", "2026 Epic Games, Inc. (OpenRigLogic 
 tags = ["Rigging", "Animation", "Import-Export"]
 
 [permissions]
-files = "Read DNA and video files; store capture tools and animation data"
+files = "Read DNA, textures and video; store capture tools and animation"
 network = "Receive Live Link Face and download optional video tools"
 
 [build]

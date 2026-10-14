@@ -11,7 +11,7 @@ import bpy
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, FloatVectorProperty, IntProperty, StringProperty
 from bpy_extras.io_utils import ImportHelper
 
-from . import bake, bakeplan, cleanup, dnaio, faceboard, importer, organization, pipeline, verify
+from . import bake, bakeplan, cleanup, dnaio, faceboard, importer, organization, pipeline, verify, materials
 from .constants import ADDON_ID, LABEL
 from .logicmodel import RigLogicModel
 
@@ -56,6 +56,8 @@ class MM_OT_import_dna(bpy.types.Operator, ImportHelper):
         description="Extra location for the face board armature (0 keeps it where it is saved)",
     )
     quality: EnumProperty(name="Rig Quality", items=QUALITY_ITEMS, default="LITE")  # type: ignore[valid-type]
+    texture_folder: StringProperty(name="Textures Folder", subtype='DIR_PATH',
+        description="Unreal DCC export root or Maps folder; blank uses the sidebar selection")
     force_bake: BoolProperty(  # type: ignore[valid-type]
         name="Bake Even If Verification Fails", default=False,
         description="Create the drivers even when they do not reproduce RigLogic (not recommended)",
@@ -67,6 +69,9 @@ class MM_OT_import_dna(bpy.types.Operator, ImportHelper):
         layout.prop(self, "scale")
         layout.prop(self, "lod")
         layout.prop(self, "quality")
+        box = layout.box()
+        box.label(text="Materials and Textures")
+        box.prop(self, "texture_folder")
         box = layout.box()
         box.prop(self, "join_face_board")
         box.prop(self, "face_board_file")
@@ -90,8 +95,11 @@ class MM_OT_import_dna(bpy.types.Operator, ImportHelper):
             return {"CANCELLED"}
 
         try:
+            texture_folder = self.texture_folder or context.scene.mm_texture_folder
+            if texture_folder:
+                materials.texture_files(texture_folder)
             dnaio.load_bindings(bindings_folder)
-        except RuntimeError as error:
+        except (RuntimeError, ValueError, OSError) as error:
             self.report({"ERROR"}, str(error).splitlines()[0])
             bake.write_report(["MetaMorphosis import failed", "", str(error)])
             return {"CANCELLED"}
@@ -181,6 +189,10 @@ class MM_OT_import_dna(bpy.types.Operator, ImportHelper):
                 progress=lambda fraction: wm.progress_update(int(75 + 24 * fraction)),
             )
             report_lines += _stats_lines(plan, stats)
+            imported.rig['mm_lod'] = self.lod
+            if texture_folder:
+                report_lines += materials.setup(reader, model, variant, imported.rig, board_object,
+                    imported.meshes, texture_folder, imported.collection, prefix, self.lod)
         except Exception as error:  # noqa: BLE001
             logger.exception("MetaMorphosis import failed")
             report_lines += ["", f"FAILED: {type(error).__name__}: {error}", "", traceback.format_exc()]
@@ -189,6 +201,7 @@ class MM_OT_import_dna(bpy.types.Operator, ImportHelper):
             return {"CANCELLED"}
         finally:
             if import_snapshot is not None:
+                materials.rename_created(import_snapshot)
                 cleanup.mark_created(import_snapshot, import_token)
             if reader is not None:
                 dnaio.release_handle(reader)

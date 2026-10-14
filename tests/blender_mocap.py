@@ -64,7 +64,7 @@ assert len(rows) == 25 and rows[12][1]['jawOpen'] == .5
 pose = face_board_pose({'jawForward': 1, 'jawLeft': 1, 'tongueOut': 1, 'eyeWideLeft': 1, 'mouthClose': .8})
 assert pose['CTRL_C_jaw_fwdBack', 1] == -1 and pose['CTRL_C_jaw', 0] == -1
 assert pose['CTRL_C_tongue_inOut', 1] == -1 and pose['CTRL_L_eye_blink', 1] == -1
-assert all(pose[f'CTRL_{s}_mouth_lipsTogether{p}', 1] == .8 for s in 'LR' for p in 'UD')
+assert all(pose[f'CTRL_{s}_mouth_lipsTogether{p}', 1] == 1 for s in 'LR' for p in 'UD')
 for name in ARKIT_NAMES:
     assert face_board_pose({name: 1}) != face_board_pose({}), ('unmapped input', name)
 assert face_board_pose({'mouthSmileLeft': 1}, mirror=True)['CTRL_R_mouth_cornerPull', 1] == 1

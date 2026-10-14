@@ -1,168 +1,159 @@
-# MetaMorphosis 1.0.9 (Blender 5.0+)
+<p align="center">
+  <img src="docs/images/metamorphosis-banner.svg" alt="MetaMorphosis — MetaHuman DNA to native Blender animation" width="100%">
+</p>
 
-Imports a MetaHuman head DNA (head, eyes, teeth, ... one object + material slot each, original facial
-deformation rig, face board with widgets) and bakes RigLogic into native Blender drivers.
+<p align="center">
+  <strong>MetaHuman heads · Native facial drivers · Capture · Animated materials</strong><br>
+  Development version <strong>1.0.10</strong> · Blender <strong>5.0+</strong> · <strong>Lite</strong> rig mode
+</p>
 
-Setup (one time)
-1. Install the zip: Edit > Preferences > Get Extensions > (v) Install from Disk, then restart Blender.
-2. Face board: `face_board.blend` in the add-on `assets` folder, or set its path in the add-on preferences.
-3. Bindings: Poly Hammer's `bindings` folder copied into the add-on `bindings` folder, or its path in the
-   preferences. Press "Test Bindings" in the preferences to check.
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#materials-and-wrinkles">Materials</a> ·
+  <a href="#facial-capture">Capture</a> ·
+  <a href="#verification-and-performance">Verification</a> ·
+  <a href="docs/CHANGELOG.md">Changelog</a>
+</p>
 
-Use: File > Import > MetaHuman Head DNA (MetaMorphosis), or the MetaMorphosis tab in the sidebar.
+---
 
-Lite is the only import and rebuild mode. It retains primary expressions and the combination
-correctives required by Lips Together and Jaw Open Extreme; other combination correctives remain omitted.
-Details of every import are in the text block "MetaMorphosis Report".
+MetaMorphosis imports a MetaHuman head DNA file, builds its original deformation rig and face board, and compiles RigLogic into **native Blender drivers**. Imported facial controls and wrinkle animation continue working when the add-on is disabled. Capture requires the add-on while receiving or processing input; baked takes are native Blender actions.
 
-Changes in 1.0.9 — Phase 1
-- Added Live Link and Video to Mocap panels. Both animate existing face-board bones, including
-  Lips Together, and bake editable native Blender actions. No shape keys are required.
-- Live Link receives Epic Live Link Face's ARKit UDP stream. Select the head rig, use port 11111,
-  set the phone's target to the computer's LAN IP, and select **Live Link (ARKit)** mode in the app.
-  Keep both devices on the same network and allow Blender through the local firewall if needed.
-  This is the ARKit stream, not MetaHuman Animator's newer streaming protocol.
-- Connect for preview, position the timeline, then press Start Recording. A three-second countdown
-  precedes recording from that frame. Stop Recording bakes a separate take. At Timeline End offers
-  Extend Timeline or Stop Keyframing; stopping at the end keeps live preview connected.
-  Recording uses packet timestamps rather than viewport speed. Each new action preserves the previous
-  action with a fake user; choose previous takes in Blender's Action Editor. Stop recording before
-  loading another file. Disconnect or disabling the add-on finishes an active take.
-- Expression Strength, Mirror Left / Right and Smoothing apply to facial capture. Extreme Jaw is
-  optional and defaults to zero; raising it adds the preserved extreme opening near full jaw opening.
-  Retargeting is a practical ARKit-to-MetaHuman mapping, not an exact reproduction of Apple's face mesh.
-  Capture covers facial expressions and eye gaze; head/body rotation is not captured in this phase.
-- Video to Mocap: press Install Video Tools once, choose an MP4/MOV or other OpenCV-readable video,
-  select the head rig and starting frame, then Process Video and Bake. Processing runs in a separate
-  process with progress and Cancel. One visible face is tracked; frames without a detected face go
-  neutral. Videos with no detected face produce an error and do not replace an action.
-  Video results are resampled to the scene frame rate and extend the timeline to fit.
-- Video setup downloads an isolated Python environment's packages and Google's Face Landmarker model
-  into Blender's user data folder. It does not install packages into Blender's own Python environment.
-  An optional Python Executable and Video Tools Folder allow an existing local installation.
-  The tested dependencies are MediaPipe 0.10.35 and OpenCV 4.13.0.92. Face processing runs locally;
-  MediaPipe's published binaries include usage telemetry, which its maintainers state excludes input
-  video/images ([maintainer explanation](https://github.com/google-ai-edge/mediapipe/issues/6291)).
-  Video tracking has no tongue-out coefficient and may be less accurate with occlusion or strong head turns.
-- Native driver expressions now use shorter equivalent coefficient and variable spellings, fitting
-  more terms into each expression. Corrective selection, coefficient precision and Lite pruning are
-  unchanged; existing scenes receive the optimization with Rebuild Drivers. Weighted helper sums use
-  larger internal units to avoid Blender zeroing tiny intermediate values; final bone channels retain
-  their original units. This also corrects small-motion errors in the previous helper calculations.
-- Measured on the supplied Ada rig in Blender 5.2: 17,119 → 12,961 drivers (24.3% fewer),
-  median update time 23.05 → 21.94 ms across five batches of mixed facial poses. The 7–15 ms target
-  was not reached; this measurement includes the imported head meshes and is not a claim about
-  the user's separate body/proxy scene. MH_BASE imports now have 14,115 drivers versus 18,616.
-- Tests cover malformed packets, UDP receive/stop/rebind, all 52 input mappings, countdown timing,
-  both timeline-end policies, preservation of previous actions, cancellation, and native playback.
-  The supplied video tracked 1,343/1,343 frames and baked successfully. A real iPhone connection
-  has not been tested here; Live Link protocol tests use locally generated ARKit packets.
-  The 108-pose RigLogic comparisons pass on Ada, MH_BASE and Taro, and native-driver checks confirm
-  reduced intermediate precision loss without changing which deformations Lite includes.
+## What’s included
 
-Capture implementation references
-- The supplied Faceit and LiveLinkFace receiver files were used to understand packet layouts and
-  capture workflows. Their shape-key-dependent animation code is not installed or required.
-- [PyLiveLinkFace protocol](https://github.com/JimWest/PyLiveLinkFace),
-  [Epic's iOS facial capture guide](https://dev.epicgames.com/documentation/en-us/unreal-engine/recording-face-animation-on-ios-device-in-unreal-engine),
-  and [Google's Face Landmarker API](https://developers.google.com/edge/mediapipe/solutions/vision/face_landmarker/python).
-- Phase 2 material/texture setup is awaiting the separately promised files.
+| Feature | Current development stage |
+| :--- | :--- |
+| **DNA import** | Head meshes, original skeleton, face board, organized object and bone collections |
+| **Native facial rig** | Lite-only drivers, shared middle-eye control, Lips Together and Jaw Open Extreme correctives |
+| **Materials & wrinkles** | DCC texture discovery, skin detail, eye/teeth maps, native DNA animated-map drivers |
+| **Live Link Face** | Epic ARKit UDP preview, countdown recording and editable animation takes |
+| **Video to Mocap** | Local facial tracking, background processing, cancellation and action baking |
+| **Scene cleanup** | Remove All targets imported content and preserves unrelated/shared data |
 
-Changes in 1.0.8
-- Fixed the Jaw Open Extreme face-board control by retaining its DNA joint correctives, including
-  combinations with other mouth expressions. These combinations were previously omitted by Lite.
-- Open the regular jaw control first, then raise Jaw Open Extreme to extend the opening. This
-  follows the DNA's behavior: Extreme has no effect while the regular jaw is fully closed.
-- The Lips Together fix and existing Lite primary-expression settings are preserved. Existing
-  scenes receive this fix by selecting the head rig and pressing Rebuild Drivers after loading the update.
-- Checked 108 poses per DNA against native RigLogic on Ada, MH_BASE and Taro. Import/rebuild tests
-  pass in Blender 5.0 and 5.2 with joined/separate face boards, including mesh movement, valid native
-  drivers, the previous eye/lip fixes and save/reopen with the add-on unregistered.
+<p align="center">
+  <img src="docs/images/native-workflow.svg" alt="DNA builds a native rig, DCC textures supply materials, and live or video capture produces editable actions. Native rig and wrinkle playback work without the add-on." width="100%">
+</p>
 
-Changes in 1.0.7
-- Fixed all four Lips Together face-board controls. Their motion is stored in DNA as combinations
-  with jaw movement, so dropping every combination in Lite had left these controls disconnected.
-  Lite now retains their jaw-opening, sideways-jaw and mouth-press combinations.
-- Existing primary-expression pruning is unchanged. Lip closure uses the DNA's joint weights,
-  native drivers and existing bone skinning; no shape keys or extra quality modes are added.
-- For existing scenes, select the imported head rig and press Rebuild Drivers after loading this
-  update. New imports receive the fix automatically. Open the jaw, then raise the four Lips Together
-  controls to bring the lips together while keeping the jaw open.
-- Regression tests compare individual and combined lip movement against native RigLogic on
-  Ada, MH_BASE and Taro, and check that other Lite expressions are unchanged with these controls at zero.
-  Imports and rebuilds also pass in Blender 5.0 (MH_BASE, joined board) and 5.2 (Ada, separate board),
-  including mesh movement from each control, valid native drivers and save/reopen with the add-on unregistered.
+## Quick start
 
-Changes in 1.0.6
-- Remove All sits beside Import DNA. It removes MetaMorphosis imports from the current scene,
-  including the head, armatures, face board, widgets and RigLogic helpers, plus unused imported data.
-  A confirmation dialog identifies the scope; Blender Undo can restore the removal.
-- New imports carry persistent ownership tags, so renaming or moving imported objects does not
-  prevent cleanup. Rebuilt helper objects retain ownership. Partial imports can also be removed.
-  Unrelated objects (even inside imported collections), shared data and objects used in other scenes
-  are preserved. Legacy imports are identified through their rig, mesh, board and widget references;
-  unidentifiable legacy extras are preserved rather than guessed at. No global orphan purge is used.
-  Legacy characters previously joined with an external body rig are preserved and require manual removal,
-  because deleting the combined armature would also delete the external body's bones.
-- Removed the Combine Body Rig feature and its settings. Previously combined rigs remain intact.
-- Removed blendshape import: new imports contain geometry, skinning and bone-driven expressions,
-  without DNA shape keys. Existing shape keys in older scenes are not deleted by updating the add-on;
-  rebuilding those scenes continues to support their existing drivers.
-- Simplified the sidebar with adjacent import/removal controls, rig status, grouped controls and
-  a collapsible Diagnostics panel. Panel headers and controls have icons; Blender's vertical sidebar
-  category tabs remain text-only.
-- Tested real MH_BASE and Ada imports with joined/separate face boards in Blender 5.0 and 5.2,
-  including save/reopen, middle-eye motion, no newly imported shape keys and complete owned-object cleanup.
-  Additional tests cover unrelated objects, shared materials/scenes, renamed objects and partial imports.
+1. **Install the extension** through Blender’s **Preferences → Get Extensions → Install from Disk**, then restart Blender. For an existing development installation, update its source files and reload the add-on.
+2. **Check import resources.** The add-on uses `assets/face_board.blend` and compatible OpenRigLogic bindings in `bindings/`. Preferences provide overrides; **Test Bindings** checks availability. Binding discovery matches Blender’s Python version.
+3. **Choose textures, if needed.** In the MetaMorphosis sidebar, set **Materials and Textures → Textures Folder** to your Unreal DCC export root or its `Maps` folder. Leave it blank to import without textures.
+4. **Import the head DNA** using **Import DNA**, or **File → Import → MetaHuman Head DNA (MetaMorphosis)**.
+5. **Animate the face board**, connect Live Link, or process a video. Import details and warnings appear in the **MetaMorphosis Report** text block.
 
-Changes in 1.0.5
-- Fixed "Joint group 1 references indices outside of the rig" on the supplied UE 5.7 MH_BASE.dna.
-  Control tables now reserve the DNA's declared raw, PSD, ML and RBF control slots. The previous
-  reader omitted the additional RBF slots; simply using JointColumnCount would also be insufficient
-  for this export. Invalid input/output indices still produce explicit errors.
-- RigLogic verification now includes ML/RBF control values when calibrating the PSD table.
-- Successfully imported MH_BASE.dna in Blender 5.0 with 12,145 valid native drivers, and checked
-  the saved rig and middle-eye behavior in Blender 5.2 without the add-on loaded. Ada and Taro
-  still pass native RigLogic model verification. Malformed-index rejection was also tested.
-- Lite remains the only mode, and the middle-eye fix is retained. Head/neck RBF pose correctives
-  and ML correctives remain unbaked; this release fixes reading their control indices, not their baking.
+> **Updating an existing scene:** use **Rebuild Drivers** to receive rig fixes and optimization; the original DNA and compatible bindings must remain available. Use **Apply Materials to Rig** to assign the new material setup. Capture improvements apply to new takes; existing actions remain unchanged.
 
-Changes in 1.0.4
-- Removed Exact, Fast and Balanced from import and rebuild options; Lite is the default and only choice.
-- CTRL_C_eye (the middle eye control on the face board) now moves both eyes horizontally and vertically.
-  Each individual eye control adds its own adjustment to the middle control, within the existing gaze limits.
-  Native offset constraints make the side widgets follow the center without taking over their keyframes.
-  The baked drivers explicitly include the center input, so this also works after removing the add-on.
-- Rebuilding an existing rig applies the eye fix and reuses existing center-eye Copy Location constraints
-  instead of adding duplicate offsets. New imports receive the fix automatically, with joined or separate boards.
+## Materials and wrinkles
 
-For an existing scene: install this update, select the MetaMorphosis head rig, and use Rebuild Drivers.
-The original DNA file and bindings must still be available. Rebuilding replaces the rig's previous quality with Lite.
-The eye fix was checked on Ada in Blender 5.0 and 5.2: both axes, independent offsets, gaze limits,
-existing manually added constraints, joined/separate boards, and save/reopen without the add-on.
+Select a DCC export root or its `Maps` folder. `ExportManifest.json`, when present, supplies additional texture-folder locations.
 
-Changes in 1.0.3
-- Imported characters contain ARMATURE, HEAD and RIGLOGICDATA collections.
-  Blender adds numeric suffixes when another character already uses those collection names.
-- Original skeleton bones are grouped in DEF_HEAD, except spine_04, spine_05, clavicle_l,
-  clavicle_r, neck_01, neck_02 and head, which belong to DEF_BODY.
-  The face board's existing bone collections are nested under MH_FACE_BOARD, whether joined or separate.
-- Imported object names and armature data names are uppercase. Bone names remain unchanged so
-  DNA lookup, skin weights and driver references retain their original meanings.
-  Armatures use Wire object display with In Front enabled.
-- Helper drivers use indexed storage separated by dependency depth, and identical helper
-  calculations can be shared. All weights, corrective settings and calculation boundaries are retained.
-  Existing rigs can use this storage through Rebuild Drivers.
-- The speed measurement also supports a separate face board and restores its controls after measuring.
+```text
+CHARACTER_EXPORT/
+├── head.dna
+├── ExportManifest.json
+├── Maps/
+│   ├── Head_Basecolor.png
+│   ├── Head_Normal.png
+│   ├── Head_SRMF.png
+│   ├── Head_Basecolor_Animated_CM1.png   # CM1–CM3
+│   ├── Head_Normal_Animated_WM1.png     # WM1–WM3
+│   ├── Eyes_Color.png / Eyes_Normal.png
+│   └── Teeth_Color.png / Teeth_Normal.png
+└── Masks/                              # Not required by the bundled atlas shader
+```
 
-Performance and verification
-The requested 3–6 ms target was not reached. On the supplied Ada scene in Blender 5.2, the
-original and updated rigs both measured about 27 ms per update (Lite, the scene's saved quality).
-The 1.0.3 storage change produced no difference in the tested facial transforms and did not lower the
-quality level. Version 1.0.4 deliberately uses Lite exclusively. Timing depends on the character, scene,
-hardware and Blender version.
-The 1.0.3 release's Ada DNA imports with joined and separate boards, bone/scene collections, standalone native
-drivers, corrective shape drivers, body joins and extension registration were tested in Blender 5.0;
-additional native-driver and body-join checks were run in Blender 5.2.
+| Layer | Setup |
+| :--- | :--- |
+| **Skin** | Subsurface scattering, SRMF specular/roughness/metallic/fuzz, DirectX normal conversion |
+| **Fine detail** | Supplied tiled micro-normal textures, packed into the scene |
+| **Wrinkles** | Exported animated color/normal maps, bundled mask atlas, DNA-driven weights |
+| **Eyes & teeth** | Exported color and normal maps with dedicated material settings |
+| **Missing overlays** | Transparent eyelash cards when alpha is unavailable; clear saliva/eye overlay fallbacks |
 
-The add-on requires face_board.blend and platform-matched bindings as described above. Existing scenes are not automatically reorganized.
+Materials and node groups use **UPPERCASE_WITH_UNDERSCORES** names. Applying materials replaces assignments on the selected imported rig. Reapplying retires obsolete generated wrinkle graphs only when other data does not use them.
+
+Wrinkles use native simple-expression drivers, including the DNA’s required animated-map combinations. Their graph is independent of the joint drivers and survives **Rebuild Drivers**. Shader evaluation still carries a rendering cost.
+
+> **Keep textures available:** exported character maps remain linked to their folder. Bundled masks and micro normals are packed. Pack external resources in Blender before moving a scene if its texture paths will change.
+
+Missing animated normals produce static skin and a report warning. Incompatible animated-map inputs report an error instead of silently producing incorrect wrinkles. This feature does not generate hair grooms or missing eyelash textures. See [material asset provenance](assets/README.md).
+
+## Facial capture
+
+### Live Link Face
+
+1. Select the imported **Head Rig** in the **Live Link** panel.
+2. On the iPhone, choose **Live Link (ARKit)** mode and set the target to the computer’s LAN IP. The default port is **11111**. Both devices need network access to each other.
+3. Connect for preview, position Blender’s timeline, then select **Start Recording**.
+4. After the **three-second countdown**, recording begins at the selected frame. **Stop Recording** bakes a separate take.
+
+| Setting | Behavior |
+| :--- | :--- |
+| **Extend Timeline** | Grows the timeline while recording |
+| **Stop Keyframing** | Finishes the take at the timeline end while live preview stays connected |
+| **Lip / Brow Strength** | Adjusts retargeted expression range |
+| **Smoothing** | Smooths capture; mouth/jaw smoothing is capped at 15 ms for speech transients |
+| **Extreme Jaw** | Adds the preserved extreme opening near full jaw opening; off by default |
+
+Version 1.0.10 adds jaw-relative lip closure and mappings for towards, bite, tightening, upper lip press and brow-lateral movement. ARKit does not supply independent bite/tighten/towards coefficients; these mappings are approximations. **Actual iPhone lip-sync quality has not yet been device-tested.**
+
+This receiver supports the ARKit stream, not MetaHuman Animator streaming. Capture includes expressions and eye gaze, not head/body rotation. Previous actions are retained as separate takes in the Action Editor. Stop recording before loading another file.
+
+### Video to Mocap
+
+1. Select **Install Video Tools** once. Setup automatically chooses compatible 64-bit Python, installs the isolated dependencies and downloads the tracking model. Enable Blender’s **Allow Online Access** for installation or repair.
+2. Choose a video and target rig, then place the timeline at the starting frame.
+3. Select **Process Video and Bake**. Processing runs in the background with progress and cancellation.
+
+| Dependency | Pinned version |
+| :--- | :--- |
+| MediaPipe | `0.10.35` |
+| OpenCV contrib | `4.13.0.92` |
+| Google Face Landmarker | `float16 / version 1` |
+
+Setup selects **64-bit Python 3.9–3.12** and keeps its packages separate from Blender’s Python. Windows installations default to `%LOCALAPPDATA%/MetaMorphosis/VideoTools`; successful custom locations are remembered across scenes and Blender versions. Manual paths and **Repair Video Tools** are under **Advanced Setup**. Older 1.0.9 environments need one click on **Install Video Tools** to migrate overlapping OpenCV packages.
+
+Video results are resampled to the scene frame rate and extend the timeline. One visible face is tracked; undetected frames become neutral. No-face videos fail without replacing an action. Video tracking does not provide tongue-out motion and can lose accuracy with occlusion or strong head turns.
+
+Processing runs locally. MediaPipe’s published binaries include usage telemetry; its maintainers state that it excludes input images and videos. [Maintainer explanation](https://github.com/google-ai-edge/mediapipe/issues/6291).
+
+## Verification and performance
+
+| Check | Recorded result |
+| :--- | :--- |
+| **Blender integration** | Material workflows verified in Blender 5.0 and 5.2 |
+| **Logan wrinkles** | 41 mask inputs; 223 additional native drivers; tested against native RigLogic |
+| **Mouth correctives** | 108 poses per DNA on Ada, MH_BASE and Taro |
+| **Standalone behavior** | Save/reopen and wrinkle playback with the add-on disabled |
+| **Data preservation** | Material reapplication, shared data and scoped cleanup checks |
+| **Capture** | Simulated ARKit UDP, recording policies, cancellation and video baking |
+| **Video sample** | 1,343 tracked frames in the supplied test video |
+| **Installer** | Automatic Python 3.12 selection, dependency repair and persistent setup |
+
+The recorded **1.0.9 Ada benchmark** reduced drivers from **17,119 to 12,961** (24.3%) and median update time from **23.05 to 21.94 ms** in Blender 5.2. These measurements predate Phase 2 materials and are not a benchmark of a combined body/proxy scene. **The 7–15 ms target has not been reached.**
+
+### Current limits
+
+- Lite retains primary expressions plus the selected **Lips Together** and **Jaw Open Extreme** joint correctives. Other joint PSD combinations remain omitted.
+- ML and head/neck RBF correctives remain unbaked, although newer DNA control indices are read correctly.
+- Jaw Open Extreme extends an already-open jaw; it has no effect when the regular jaw is fully closed.
+- Real-phone capture quality remains unverified. Materials do not remove the cost of viewport shading.
+- Body-rig combining and new blendshape import are removed. Existing legacy shape keys are preserved.
+
+### Development checks
+
+Regression scripts live in [`tests/`](tests/). They run inside Blender; use `work/` for temporary scenes and logs. Relevant suites cover material import/reapplication, capture response, UDP recording, video setup, cleanup and native RigLogic comparisons. Some tests require the local DNA/texture/video fixtures described in the project memory; UDP and dependency-download tests require network access.
+
+## Development history and credits
+
+**Current stage: Phase 2 — materials, native wrinkles and capture refinement.**
+
+- [Full development history, 1.0.3–1.0.10](docs/CHANGELOG.md)
+- [Material asset provenance](assets/README.md)
+- [Epic MetaHuman texture documentation](https://dev.epicgames.com/documentation/metahuman/materials-and-textures)
+- [PyLiveLinkFace protocol reference](https://github.com/JimWest/PyLiveLinkFace)
+- [Google Face Landmarker documentation](https://developers.google.com/edge/mediapipe/solutions/vision/face_landmarker/python)
+- [OpenCV package selection guidance](https://pypi.org/project/opencv-contrib-python/4.13.0.92/)
+
+The supplied Faceit and LiveLinkFace reference files informed capture workflows; their shape-key-dependent runtime is not required. The extension declares GPL-3.0-or-later; OpenRigLogic bindings carry their own MIT licensing. Shader and texture assets retain their original creators’ rights.

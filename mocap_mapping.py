@@ -2,14 +2,20 @@
 from .mocap_core import ARKIT_NAMES
 
 
-def face_board_pose(values, gain=1.0, mirror=False, extreme=0.0):
+def face_board_pose(values, gain=1.0, mirror=False, extreme=0.0, lips_gain=1.35, brow_gain=1.4):
     v = {n: max(0.0, min(1.0, float(values.get(n, 0.0)) * gain)) for n in ARKIT_NAMES}
     if mirror:
         for name in ARKIT_NAMES:
             if name.endswith("Left"):
                 other = name[:-4] + "Right"
                 v[name], v[other] = v[other], v[name]
+    for name in v:
+        if name.startswith(('mouthClose','mouthFunnel','mouthPucker','mouthRoll','mouthPress')):
+            v[name] = min(1.0, v[name]*lips_gain)
+        elif name.startswith('brow'):
+            v[name] = min(1.0, v[name]*brow_gain)
     pose = {}
+    closure = min(1.0, v['mouthClose']/max(.15,v['jawOpen']))
     def put(bone, value, axis=1):
         pose[(bone, axis)] = max(-1.0, min(1.0, value))
     put("CTRL_C_jaw", v["jawOpen"])
@@ -34,14 +40,26 @@ def face_board_pose(values, gain=1.0, mirror=False, extreme=0.0):
                                ("mouth_dimple", "mouthDimple"), ("mouth_stretch", "mouthStretch"),
                                ("mouth_lowerLipDepress", "mouthLowerDown"),
                                ("mouth_upperLipRaise", "mouthUpperUp"), ("nose", "noseSneer")):
-            put(prefix+target, v[source+word])
+            value = v[source+word]
+            if source in {'mouthLowerDown','mouthUpperUp'}:
+                value *= 1-.85*closure
+            put(prefix+target, value)
         put(prefix+"brow_raiseIn", v["browInnerUp"])
+        put(prefix+"brow_lateral", .5*v['browDown'+word])
         put(prefix+"mouth_suckBlow", v["cheekPuff"])
         for part, vertical in (("U", "Upper"), ("D", "Lower")):
             put(prefix+"mouth_funnel"+part, v["mouthFunnel"])
             put(prefix+"mouth_purse"+part, v["mouthPucker"])
-            put(prefix+"mouth_lipsTogether"+part, v["mouthClose"])
-            put(prefix+"mouth_lipsRoll"+part, v["mouthRoll"+vertical])
-            put(prefix+"mouth_press"+part, v["mouthPress"+word])
+            press = v['mouthPress'+word]
+            roll = v['mouthRoll'+vertical]
+            # ARKit closure is an absolute action; DNA Lips Together is relative
+            # to the current jaw opening. Normalize it before applying the PSD.
+            put(prefix+"mouth_lipsTogether"+part, max(closure,press,roll*.7))
+            put(prefix+"mouth_lipsRoll"+part, roll*.35)
+            put(prefix+"mouth_lipBite"+part, roll*.8)
+            put(prefix+"mouth_towards"+part, v['mouthPucker']*.75)
+            put(prefix+"mouth_tighten"+part, press*.6)
+            put(prefix+"mouth_press"+part, press)
             put(prefix+"jaw_ChinRaise"+part, v["mouthShrug"+vertical])
+        put(prefix+'mouth_lipsPressU',v['mouthPress'+word]*.5)
     return pose

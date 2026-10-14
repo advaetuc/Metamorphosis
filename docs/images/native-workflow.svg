@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="260" viewBox="0 0 1200 260" role="img" aria-labelledby="title desc">
+<title id="title">From source data to native animation</title><desc id="desc">Head DNA and DCC maps build a rig and materials. ARKit or video capture becomes editable actions. Native playback remains available without the add-on.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10" fill="none" stroke="#74d8c5" stroke-width="1.6"/></marker></defs>
+<rect width="1200" height="260" rx="20" fill="#101d2b"/>
+<g fill="none" stroke="#74d8c5" stroke-width="2" marker-end="url(#arrow)"><path d="M320 72H370V130H422"/><path d="M320 130H422"/><path d="M320 188H370V130"/><path d="M746 130H836"/></g>
+<g font-family="Segoe UI, Arial, sans-serif"><g fill="#1d3042" stroke="#385268"><rect x="32" y="46" width="288" height="52" rx="10"/><rect x="32" y="104" width="288" height="52" rx="10"/><rect x="32" y="162" width="288" height="52" rx="10"/></g>
+<g fill="#e8f1fa" font-size="18" text-anchor="middle"><text x="176" y="79">HEAD DNA</text><text x="176" y="137">DCC TEXTURES</text><text x="176" y="195">ARKIT / VIDEO</text></g>
+<rect x="426" y="46" width="320" height="168" rx="14" fill="#183b40" stroke="#69d9bf"/>
+<text x="586" y="83" text-anchor="middle" fill="#83edcf" font-size="12" letter-spacing="2">METAMORPHOSIS</text>
+<text x="586" y="126" text-anchor="middle" fill="#f3f8fc" font-size="26" font-weight="700">Build · Retarget · Bake</text>
+<text x="586" y="162" text-anchor="middle" fill="#c4ddd9" font-size="16">Rig + materials + animation</text>
+<rect x="842" y="46" width="326" height="168" rx="14" fill="#20304a" stroke="#8eabdf"/>
+<text x="1005" y="83" text-anchor="middle" fill="#b7ccfa" font-size="12" letter-spacing="2">NATIVE BLENDER DATA</text>
+<text x="1005" y="126" text-anchor="middle" fill="#f3f8fc" font-size="24" font-weight="700">Drivers + editable actions</text>
+<text x="1005" y="162" text-anchor="middle" fill="#d0ddee" font-size="16">Playback without the add-on</text>
+<text x="32" y="242" fill="#aebfce" font-size="13">The add-on is needed for import and capture. Baked rig and wrinkle playback are standalone.</text></g>
+</svg>

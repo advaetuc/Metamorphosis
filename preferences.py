@@ -28,7 +28,7 @@ class MM_Preferences(bpy.types.AddonPreferences):
 
     def draw(self, context):
         layout = self.layout
-        layout.label(text=f"{LABEL} needs two things only while importing:")
+        layout.label(text=f"{LABEL} import resources (auto-detected when blank):")
         layout.prop(self, "face_board_file")
         layout.prop(self, "bindings_folder")
         layout.operator("metamorphosis.test_bindings", icon="CHECKMARK")

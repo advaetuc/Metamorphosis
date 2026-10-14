@@ -1,7 +1,7 @@
 """Import the head meshes and the original facial deformation rig from a MetaHuman head DNA.
 
-Only geometry, skinning and the skeleton are created. No textures, no node trees, no
-wrinkle-map logic. Every DNA mesh becomes one object with exactly one (empty) material slot, which is
+This module creates geometry, skinning and the skeleton; materials.py handles optional
+textures and wrinkle drivers. Every DNA mesh becomes one object with one material slot, which is
 how MetaHuman splits meshes by material (head, teeth, saliva, eyeLeft, eyeRight, eyeshell, eyelashes ...).
 """
 
@@ -237,6 +237,7 @@ def import_head(reader, options: ImportOptions) -> ImportResult:
             obj = _create_mesh(reader, mesh_index, mesh_name, options, result.rig, mesh_collection, joint_names, result)
             result.meshes.append(obj)
             obj["mm_head_mesh"] = True
+            obj['mm_mesh_kind'] = _kind_of(mesh_name)
         except Exception as error:  # noqa: BLE001 - keep importing the other meshes
             logger.exception("Mesh '%s' failed", mesh_name)
             result.warnings.append(f"Mesh '{mesh_name}' failed to import: {error}")

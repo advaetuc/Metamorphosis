@@ -9,6 +9,7 @@ import urllib.request
 import venv
 
 MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
+TOOLS_VERSION = '2'
 
 
 def environment_python(folder):
@@ -20,8 +21,14 @@ def setup(folder):
     print("Creating local video environment", flush=True)
     venv.EnvBuilder(with_pip=True).create(folder / "python")
     python = environment_python(folder / "python")
+    (folder/'ready.json').unlink(missing_ok=True)
+    # All OpenCV wheels own cv2. MediaPipe requires contrib; installing the main
+    # package alongside it lets an unpinned contrib wheel overwrite the runtime.
+    subprocess.run([str(python), '-m', 'pip', 'uninstall', '-y', 'opencv-python',
+                    'opencv-python-headless', 'opencv-contrib-python-headless', 'opencv-contrib-python'], check=True)
     subprocess.run([str(python), "-m", "pip", "install", "--disable-pip-version-check",
-                    "mediapipe==0.10.35", "opencv-python==4.13.0.92"], check=True)
+                    "mediapipe==0.10.35", "opencv-contrib-python==4.13.0.92"], check=True)
+    subprocess.run([str(python),'-m','pip','check'],check=True)
     model = folder / "face_landmarker.task"
     temp = model.with_suffix(".download")
     print("Downloading face tracking model", flush=True)
@@ -30,6 +37,7 @@ def setup(folder):
             output.write(chunk)
     temp.replace(model)
     subprocess.run([str(python), str(Path(__file__).resolve()), "--check", str(model)], check=True)
+    (folder/'ready.json').write_text(json.dumps({'version':TOOLS_VERSION}),encoding='utf-8')
     print("Video tools ready", flush=True)
 
 
@@ -105,6 +113,9 @@ if __name__ == "__main__":
         if args.setup:
             setup(args.setup)
         elif args.check:
+            from importlib.metadata import version
+            if version('mediapipe') != '0.10.35' or version('opencv-contrib-python') != '4.13.0.92':
+                raise ValueError('Video package versions do not match; use Repair Video Tools')
             with tracker(args.check):
                 pass
         else:

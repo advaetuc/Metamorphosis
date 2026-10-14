@@ -18,6 +18,11 @@ class MM_PT_panel(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
+        box = layout.box()
+        box.label(text="Materials and Textures", icon='MATERIAL')
+        box.prop(context.scene, 'mm_texture_folder')
+        if bake.find_baked_rig(context):
+            box.operator('metamorphosis.setup_materials', icon='MATERIAL')
         row = layout.row(align=True)
         row.scale_y = 1.25
         row.operator("metamorphosis.import_dna", text="Import DNA", icon="IMPORT")
@@ -100,6 +105,8 @@ class MM_PT_live_link(bpy.types.Panel):
         col.enabled = not recording
         col.prop(settings, 'mirror')
         col.prop(settings, 'gain')
+        col.prop(settings, 'lips_gain')
+        col.prop(settings, 'brow_gain')
         col.prop(settings, 'smoothing')
         col.prop(settings, 'extreme')
         col.prop(settings, 'take_name')
@@ -133,6 +140,8 @@ class MM_PT_video(bpy.types.Panel):
         col.prop(settings, 'take_name')
         col.prop(settings, 'mirror')
         col.prop(settings, 'gain')
+        col.prop(settings, 'lips_gain')
+        col.prop(settings, 'brow_gain')
         col.prop(settings, 'smoothing')
         col.prop(settings, 'extreme')
         col.operator('metamorphosis.video_process', icon='ACTION')
@@ -141,9 +150,15 @@ class MM_PT_video(bpy.types.Panel):
         layout.label(text=settings.video_status)
         box = col.box()
         box.label(text="One-time setup", icon='PREFERENCES')
-        box.operator('metamorphosis.video_setup', icon='IMPORT')
-        box.prop(settings, 'video_python')
-        box.prop(settings, 'video_folder')
+        if mocap.video_ready(mocap.video_folder(settings)):
+            box.label(text='Video tools installed',icon='CHECKMARK')
+        else:
+            box.operator('metamorphosis.video_setup', icon='IMPORT')
+        box.prop(settings, 'video_advanced')
+        if settings.video_advanced:
+            box.prop(settings, 'video_python')
+            box.prop(settings, 'video_folder')
+            box.operator('metamorphosis.video_setup',text='Repair Video Tools',icon='FILE_REFRESH').repair = True
         layout.label(text="Videos are processed on this computer.")
 
 

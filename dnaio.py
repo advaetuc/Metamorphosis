@@ -19,6 +19,7 @@ from __future__ import annotations
 import importlib
 import logging
 import os
+import re
 import sys
 
 from pathlib import Path
@@ -40,12 +41,16 @@ def _scan(root: Path) -> dict:
     found = {"root": root, "exists": root.is_dir(), "dna_py": [], "riglogic_py": [], "dna_native": [], "rl_native": []}
     if not root.is_dir():
         return found
+    python_tag = f'py{sys.version_info.major}{sys.version_info.minor}'
+    if any(re.fullmatch(r'py\d{2,3}', part) and part != python_tag for part in root.parts):
+        return found
     base = len(root.parts)
     for current, dirs, files in os.walk(root):
         here = Path(current)
         if len(here.parts) - base >= MAX_SEARCH_DEPTH:
             dirs[:] = []
-        dirs[:] = [d for d in dirs if d not in ("__pycache__", ".git", "node_modules")]
+        dirs[:] = [d for d in dirs if d not in ("__pycache__", ".git", "node_modules")
+                   and (not re.fullmatch(r'py\d{2,3}', d) or d == python_tag)]
         for name in files:
             if name == "dna.py":
                 found["dna_py"].append(here)

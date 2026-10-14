@@ -15,7 +15,7 @@ from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, Po
 from . import bake
 from .mocap_core import Receiver, Recording, Sample, resample
 from .mocap_mapping import face_board_pose
-from .video_worker import environment_python
+from .video_worker import environment_python, TOOLS_VERSION
 
 _live = None
 _job = None
@@ -29,6 +29,9 @@ class MM_CaptureSettings(bpy.types.PropertyGroup):
     subject: StringProperty(name="Subject", description="Optional actor filter; blank locks onto the first actor")
     mirror: BoolProperty(name="Mirror Left / Right", default=False)
     gain: FloatProperty(name="Expression Strength", default=1, min=0, max=3)
+    lips_gain: FloatProperty(name="Lip Strength", default=1.35, min=.1, max=3,
+                            description="Retarget lip closure, rounding, biting and pressing range")
+    brow_gain: FloatProperty(name="Brow Strength", default=1.4, min=.1, max=3)
     smoothing: FloatProperty(name="Smoothing", default=.04, min=0, max=.5, subtype='TIME',
                              description="Smoothing time in seconds; zero disables smoothing")
     extreme: FloatProperty(name="Extreme Jaw", default=0, min=0, max=1,
@@ -41,10 +44,11 @@ class MM_CaptureSettings(bpy.types.PropertyGroup):
     last_take: StringProperty(name="Last Take", default="")
     video: StringProperty(name="Video", subtype='FILE_PATH')
     video_python: StringProperty(name="Python Executable", subtype='FILE_PATH',
-                                 description="Optional Python executable for installing local video tools; blank uses Blender's Python")
+                                 description="Optional compatible Python executable; blank automatically finds 64-bit Python 3.9–3.12")
     video_folder: StringProperty(name="Video Tools Folder", subtype='DIR_PATH',
                                  description="Optional existing video-tools installation")
     video_status: StringProperty(default="Choose a video to process", options={'SKIP_SAVE'})
+    video_advanced: BoolProperty(name='Advanced Setup', default=False)
 
 
 def target_board(scene):
@@ -62,7 +66,8 @@ def target_board(scene):
 
 
 def capture_options(settings):
-    return dict(gain=settings.gain, mirror=settings.mirror, extreme=settings.extreme)
+    return dict(gain=settings.gain, mirror=settings.mirror, extreme=settings.extreme,
+                lips_gain=settings.lips_gain, brow_gain=settings.brow_gain)
 
 
 def smooth_samples(samples, seconds):
@@ -70,8 +75,12 @@ def smooth_samples(samples, seconds):
     for sample in samples:
         values = sample.values
         if previous and seconds > 0:
-            alpha = 1-math.exp(-max(0, sample.time-previous.time)/seconds)
-            values = {n: previous.values.get(n, 0)*(1-alpha)+v*alpha for n, v in values.items()}
+            values = dict(values)
+            for n, value in values.items():
+                # Speech transients need a faster response than general face smoothing.
+                duration = min(seconds,.015) if n.startswith(('mouth','jaw')) else seconds
+                alpha = 1-math.exp(-max(0, sample.time-previous.time)/duration)
+                values[n] = previous.values.get(n,0)*(1-alpha)+value*alpha
         previous = Sample(sample.time, values, sample.subject)
         yield previous
 
@@ -277,10 +286,82 @@ class MM_OT_record_stop(bpy.types.Operator):
         return {'FINISHED'}
 
 
+def shared_video_root():
+    base = Path(os.environ.get('LOCALAPPDATA', Path.home()/'.local'/'share'))
+    return base/'MetaMorphosis'/'VideoTools'
+
+
+def video_files_present(folder):
+    return environment_python(folder/'python').is_file() and (folder/'face_landmarker.task').is_file()
+
+
+def video_ready(folder):
+    try:
+        return video_files_present(folder) and json.loads((folder/'ready.json').read_text())['version']==TOOLS_VERSION
+    except (OSError,ValueError,KeyError):
+        return False
+
+
 def video_folder(settings):
     if settings.video_folder:
         return Path(bpy.path.abspath(settings.video_folder))
-    return Path(bpy.utils.user_resource('DATAFILES', path="metamorphosis_video", create=True))
+    shared = shared_video_root()
+    config = shared/'installation.json'
+    if config.is_file():
+        try:
+            saved = Path(json.loads(config.read_text(encoding='utf-8'))['folder'])
+            if video_files_present(saved):
+                return saved
+        except (ValueError,KeyError,OSError):
+            pass
+    if video_files_present(shared):
+        return shared
+    # Reuse a previous in-app installation, including after a Blender upgrade.
+    legacy = Path(bpy.utils.user_resource('DATAFILES',path='metamorphosis_video'))
+    if video_files_present(legacy):
+        return legacy
+    config_root = Path(bpy.utils.user_resource('CONFIG')).parent.parent
+    for candidate in sorted(config_root.glob('*/datafiles/metamorphosis_video'),reverse=True):
+        if video_files_present(candidate):
+            return candidate
+    return shared
+
+
+def remember_video_folder(folder):
+    root = shared_video_root()
+    root.mkdir(parents=True,exist_ok=True)
+    temporary = root/'installation.tmp'
+    temporary.write_text(json.dumps({'folder':str(folder.resolve())}),encoding='utf-8')
+    temporary.replace(root/'installation.json')
+
+
+def setup_python(settings):
+    if settings.video_python:
+        candidates = [Path(bpy.path.abspath(settings.video_python))]
+    else:
+        candidates = [Path(sys.prefix)/('bin/python.exe' if os.name == 'nt' else 'bin/python3')]
+        if os.name == 'nt':
+            import winreg
+            for version in ('3.12','3.11','3.10','3.9'):
+                for hive in (winreg.HKEY_CURRENT_USER,winreg.HKEY_LOCAL_MACHINE):
+                    try:
+                        with winreg.OpenKey(hive,fr'Software\Python\PythonCore\{version}\InstallPath') as key:
+                            candidates.append(Path(winreg.QueryValue(key,None))/'python.exe')
+                    except OSError:
+                        pass
+    for candidate in candidates:
+        if not candidate.is_file():
+            continue
+        try:
+            result = subprocess.run([str(candidate),'-c',
+                'import sys,struct;sys.exit(not ((3,9)<=sys.version_info[:2]<=(3,12) and struct.calcsize("P")==8))'],
+                capture_output=True,timeout=5,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
+            if result.returncode == 0:
+                return candidate
+        except (OSError,subprocess.TimeoutExpired):
+            pass
+    raise ValueError('Video setup needs 64-bit Python 3.9–3.12. Install Python 3.12, then click Install Video Tools again.')
 
 
 def _launch_job(scene, command, folder, **extra):
@@ -330,8 +411,10 @@ def _tick_video():
             scene.frame_set(job['frame_start'])
             settings.video_status = f"Baked {action.name} · through frame {last}"
             settings.last_take = action.name
+            remember_video_folder(job['tools_folder'])
         else:
             settings.video_status = "Video tools ready"
+            remember_video_folder(job['tools_folder'])
     except Exception as error:
         try:
             job['scene'].mm_capture.video_status = str(error)
@@ -346,22 +429,28 @@ class MM_OT_video_setup(bpy.types.Operator):
     bl_idname = 'metamorphosis.video_setup'
     bl_label = 'Install Video Tools'
     bl_description = 'Download local video-tracking tools and model; videos stay on this computer'
+    repair: BoolProperty(default=False,options={'HIDDEN'})
     def execute(self, context):
         if _job or _live:
             return {'CANCELLED'}
+        settings = context.scene.mm_capture
+        folder = video_folder(settings)
+        if video_ready(folder) and not self.repair:
+            try:
+                _launch_job(context.scene,[str(environment_python(folder/'python')),
+                    str(Path(__file__).with_name('video_worker.py')),'--check',str(folder/'face_landmarker.task')],
+                    folder,tools_folder=folder)
+                settings.video_status = 'Checking existing video tools…'
+                return {'FINISHED'}
+            except Exception as error:
+                self.report({'ERROR'},str(error)); return {'CANCELLED'}
         if not bpy.app.online_access:
             self.report({'ERROR'}, "Enable Blender's Allow Online Access to download the video tools")
             return {'CANCELLED'}
-        settings = context.scene.mm_capture
-        python = Path(bpy.path.abspath(settings.video_python)) if settings.video_python else (
-            Path(sys.prefix)/('bin/python.exe' if os.name == 'nt' else 'bin/python3'))
-        if not python.is_file():
-            self.report({'ERROR'}, "Select a Python executable in Video to Mocap settings")
-            return {'CANCELLED'}
-        folder = video_folder(settings)
         try:
+            python = setup_python(settings)
             _launch_job(context.scene, [str(python), str(Path(__file__).with_name('video_worker.py')),
-                                       '--setup', str(folder)], folder)
+                                       '--setup', str(folder)], folder, tools_folder=folder)
             settings.video_status = "Installing video tools and model…"
         except Exception as error:
             self.report({'ERROR'}, str(error))
@@ -386,13 +475,13 @@ class MM_OT_video_process(bpy.types.Operator):
             video = Path(bpy.path.abspath(settings.video))
             if not video.is_file():
                 raise ValueError("Choose an existing video file")
-            if not python.is_file() or not model.is_file():
+            if not video_ready(folder):
                 raise ValueError("Install Video Tools first")
             work = Path(tempfile.mkdtemp(prefix='mm_video_'))
             output, progress = work/'capture.jsonl', work/'progress.txt'
             _launch_job(scene, [str(python), str(Path(__file__).with_name('video_worker.py')),
                                '--video', str(video), '--model', str(model), '--output', str(output),
-                               '--progress', str(progress)], work, output=output, progress=progress,
+                               '--progress', str(progress)], work, output=output, progress=progress, tools_folder=folder,
                         board=board, frame_start=scene.frame_current, fps=scene.render.fps/scene.render.fps_base,
                         name=settings.take_name, options=capture_options(settings), smoothing=settings.smoothing)
             settings.video_status = "Processing video locally…"
