@@ -1,13 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" role="img" aria-labelledby="title desc">
-<title id="title">MetaMorphosis</title><desc id="desc">MetaHuman DNA to native Blender animation. Version 1.0.10, Phase 2.</desc>
+<title id="title">MetaMorphosis</title><desc id="desc">MetaHuman DNA to native Blender animation. Version 1.2.2.</desc>
 <defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#101b2d"/><stop offset="1" stop-color="#173b43"/></linearGradient><linearGradient id="helix"><stop stop-color="#63ebc9"/><stop offset="1" stop-color="#a3b6ff"/></linearGradient></defs>
 <rect width="1200" height="300" rx="24" fill="url(#bg)"/>
 <g fill="none" stroke="#ffffff" stroke-opacity=".045"><path d="M0 60H1200M0 120H1200M0 180H1200M0 240H1200M60 0V300M120 0V300M180 0V300M240 0V300M300 0V300M360 0V300M420 0V300M480 0V300M540 0V300M600 0V300M660 0V300M720 0V300M780 0V300M840 0V300M900 0V300M960 0V300M1020 0V300M1080 0V300M1140 0V300"/></g>
 <g font-family="Segoe UI, Arial, sans-serif"><text x="62" y="66" fill="#74eed0" font-size="14" font-weight="700" letter-spacing="3">DNA / MOTION / MATERIALS</text>
 <text x="58" y="140" fill="#f2f7ff" font-size="66" font-weight="700" letter-spacing="-2">MetaMorphosis</text>
 <text x="62" y="182" fill="#c0d0dd" font-size="23">MetaHuman DNA to native Blender animation.</text>
-<rect x="62" y="222" width="118" height="32" rx="16" fill="#63ebc9"/><text x="121" y="244" text-anchor="middle" font-size="14" font-weight="700" fill="#102a31">v1.0.10</text>
+<rect x="62" y="222" width="118" height="32" rx="16" fill="#63ebc9"/><text x="121" y="244" text-anchor="middle" font-size="14" font-weight="700" fill="#102a31">v1.2.2</text>
 <rect x="192" y="222" width="154" height="32" rx="16" fill="#223e50"/><text x="269" y="244" text-anchor="middle" font-size="14" fill="#e7f2fa">BLENDER 5.0+</text>
-<text x="366" y="244" fill="#c0d0dd" font-size="14">PHASE 2 DEVELOPMENT</text></g>
+<text x="366" y="244" fill="#c0d0dd" font-size="14">by TheClayMan3D</text></g>
 <g transform="translate(970 35)" fill="none" stroke="url(#helix)" stroke-width="5" stroke-linecap="round"><path d="M-60 0C100 65-100 165 60 230M60 0C-100 65 100 165-60 230"/><g stroke-width="2" opacity=".55"><path d="M-38 12H38M-9 38H9M-21 67H21M-39 95H39M-42 115H42M-38 138H38M-20 167H20M-9 195H9M-38 218H38"/></g></g>
 </svg>

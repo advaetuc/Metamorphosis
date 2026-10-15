@@ -82,6 +82,10 @@ def remove_all(context):
         if obj.data is not None:
             legacy_data.add(obj.data)
             legacy_data.update(slot.material for slot in obj.material_slots if slot.material)
+        if obj.get('mm_native_sum_data'):
+            legacy_data.update(mod.node_group for mod in obj.modifiers
+                               if mod.type == 'NODES' and mod.node_group
+                               and mod.node_group.get('mm_native_sum_data'))
         bpy.data.objects.remove(obj, do_unlink=True)
         removed += 1
     # Objects also used in another scene must not be deleted globally.

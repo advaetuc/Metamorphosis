@@ -1,8 +1,8 @@
 """Turn a :class:`bakeplan.Plan` into Blender drivers.
 
-Everything created here is native Blender data (custom properties + drivers using *simple expressions*
-or the built-in SUM driver). Nothing refers to this add-on, so the rig keeps working when the add-on
-is disabled or removed, and it does not need "Auto Run Python Scripts".
+Everything created here is native Blender data (custom properties, Geometry Nodes and drivers using
+simple expressions or the built-in SUM driver). Nothing refers to this add-on, so the rig works when
+the add-on is disabled or removed, and it does not need "Auto Run Python Scripts".
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ def _clean_driver(fcurve: bpy.types.FCurve) -> bpy.types.Driver:
     return driver
 
 
-def _add_variable(driver, var, *, holder_of, rig, board) -> None:
+def _add_variable(driver, var, *, holder_of, rig, board, geometry_object=None) -> None:
     variable = driver.variables.new()
     variable.name = var.name
     variable.type = "SINGLE_PROP"
@@ -66,6 +66,9 @@ def _add_variable(driver, var, *, holder_of, rig, board) -> None:
         holder, index = holder_of[var.ref]
         target.id = holder
         target.data_path = f'["mm_values"][{index}]'
+    elif var.kind == "geometry":
+        target.id = geometry_object
+        target.data_path = f'data.vertices[{var.index}].co[0]'
     elif var.kind == "loc":
         target.id = board
         target.data_path = f'pose.bones["{var.ref}"].location[{var.index}]'
@@ -74,7 +77,7 @@ def _add_variable(driver, var, *, holder_of, rig, board) -> None:
         target.data_path = f'pose.bones["{var.ref}"].rotation_quaternion[{var.index}]'
 
 
-def _add_driver(owner, data_path: str, index: int, node, *, holder_of, rig, board, counters) -> None:
+def _add_driver(owner, data_path: str, index: int, node, *, holder_of, rig, board, counters, geometry_object=None) -> None:
     if index >= 0:
         fcurve = owner.driver_add(data_path, index)
     else:
@@ -86,7 +89,7 @@ def _add_driver(owner, data_path: str, index: int, node, *, holder_of, rig, boar
             raise ValueError(f"Driver expression too long ({len(node.expr)}): {node.expr[:60]}...")
         driver.expression = node.expr
     for var in node.vars:
-        _add_variable(driver, var, holder_of=holder_of, rig=rig, board=board)
+        _add_variable(driver, var, holder_of=holder_of, rig=rig, board=board, geometry_object=geometry_object)
     counters["drivers"] += 1
     counters["variables"] += len(node.vars)
     if node.dtype == "SCRIPTED" and not driver.is_simple_expression:
@@ -105,8 +108,8 @@ def realize(
     scale: float,
     progress=None,
 ) -> dict:
-    """Create the properties and drivers. ``holders`` are the data empties (helper properties are spread
-    over them). Returns statistics."""
+    """Create the native graph. ``holders`` starts with property empties; any
+    matrix helper meshes are appended to it. Returns statistics."""
     started = time.perf_counter()
     counters = {"drivers": 0, "variables": 0, "not_simple": 0}
 
@@ -132,6 +135,15 @@ def realize(
         if holder.animation_data is None:
             holder.animation_data_create()
 
+    geometry_object = None
+    if plan.stats.get('native_sums'):
+        from . import native_sums
+        geometry_object, matrix_objects = native_sums.create(
+            plan, rig=rig, board=board, collection=holders[0].users_collection[0],
+            holder_of=holder_of, counters=counters,
+        )
+        holders.extend(matrix_objects)
+
     total = max(len(plan.nodes), 1)
     for number, node in enumerate(plan.nodes):
         kind = node.target[0]
@@ -143,6 +155,7 @@ def realize(
             _add_driver(
                 rig, f'pose.bones["{bone}"].{path}', index, node, holder_of=holder_of, rig=rig, board=board,
                 counters=counters,
+                geometry_object=geometry_object,
             )
         if progress is not None and number % 500 == 0:
             progress(number / total)
@@ -192,10 +205,9 @@ def remove_baked(rig: bpy.types.Object) -> None:
             for block in key.key_blocks:
                 if block.name != "Basis":
                     block.value = 0.0
-    for holder_name in filter(None, str(rig.get(RIG_KEY_DATA, "")).split("\n")):
-        holder = bpy.data.objects.get(holder_name)
-        if holder is not None:
-            bpy.data.objects.remove(holder, do_unlink=True)
+    from . import native_sums
+    native_sums.remove_objects([holder for name in str(rig.get(RIG_KEY_DATA, "")).split("\n")
+                                if (holder := bpy.data.objects.get(name)) is not None])
     for pose_bone in rig.pose.bones:
         if pose_bone.name in driven:
             pose_bone.location = (0.0, 0.0, 0.0)
@@ -250,6 +262,8 @@ def baked_fcurves(rig: bpy.types.Object):
         holder = bpy.data.objects.get(holder_name)
         if holder is not None and holder.animation_data:
             yield from holder.animation_data.drivers
+        if holder is not None and holder.type == 'MESH' and holder.data.animation_data:
+            yield from holder.data.animation_data.drivers
     driven = set(filter(None, str(rig.get(RIG_KEY_BONES, "")).split("\n")))
     if rig.animation_data:
         for fcurve in rig.animation_data.drivers:

@@ -7,7 +7,7 @@ from .constants import LABEL
 
 
 class MM_PT_panel(bpy.types.Panel):
-    bl_label = LABEL
+    bl_label = "MetaMorphosis DNA Addon"
     bl_idname = "MM_PT_panel"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
@@ -15,6 +15,9 @@ class MM_PT_panel(bpy.types.Panel):
 
     def draw_header(self, context):
         self.layout.label(text="", icon="ARMATURE_DATA")
+
+    def draw_header_preset(self, context):
+        self.layout.label(text="by TheClayMan3D")
 
     def draw(self, context):
         layout = self.layout

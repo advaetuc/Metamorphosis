@@ -22,6 +22,8 @@ def optimize_plan(plan):
     seen = set(ordered) | set(aliases)
     ordered.extend(p for p in plan.props if p not in seen)
     plan.props = {name: plan.props[name] for name in ordered}
+    plan.linear_channels = [(target, [(aliases.get(key, key), weight) for key, weight in terms])
+                            for target, terms in getattr(plan, 'linear_channels', [])]
     plan.stats.update(nodes=len(nodes), properties=len(plan.props),
         optimized_drivers=before_nodes-len(nodes),
         optimized_variables=before_vars-sum(len(n.vars) for n in nodes))

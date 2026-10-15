@@ -16,8 +16,8 @@ bpy.context.scene.mm_texture_folder=str(folder)
 assert bpy.ops.metamorphosis.import_dna(filepath=str(folder/'head.dna'),character_name='LOGAN',face_board_file=str(ROOT/'assets'/'face_board.blend'))=={'FINISHED'}
 rig=bake.find_baked_rig(bpy.context);board=bpy.data.objects[rig[bake.RIG_KEY_BOARD_OBJECT]]
 head=next(m for m in bake.head_meshes(rig) if m.get('mm_mesh_kind')=='head')
-group=head.active_material.node_tree.nodes['DNA_WRINKLES']
-assert len([i for i in group.inputs if '.head_' in i.name])==41
+group=materials.wrinkle_node(head.active_material)
+assert len(list(materials.wrinkle_sockets(group)))==41
 reader=dnaio.open_reader(folder/'head.dna');model=RigLogicModel.from_reader(reader)
 res=verify.verify_model(model,riglogic,reader,release=dnaio.release_handle)
 manager=riglogic.RigLogic(reader,riglogic.Configuration(),None);instance=riglogic.RigInstance(rigLogic=manager,memRes=None)
@@ -30,9 +30,8 @@ for pose in poses[:model.FACE_ONLY_SAMPLES]:
  manager.mapGUIToRawControls(instance);manager.calculate(instance)
  oracle=list(instance.getAnimatedMapOutputs())
  board.update_tag();bpy.context.view_layer.update()
- for socket in group.inputs:
-  if '.head_' not in socket.name:continue
-  wm,mask=socket.name.split('.',1);idx=name_index['head_'+wm+'_normal.'+mask.removesuffix('_msk')]
+ for socket,dna_name in materials.wrinkle_sockets(group):
+  idx=name_index[dna_name]
   err=abs(socket.default_value-oracle[idx]);worst=max(worst,err)
   assert err<1.1e-4,(socket.name,socket.default_value,oracle[idx],err)
 print('WRINKLE_ORACLE_PASS',worst,rig['mm_material_drivers'],flush=True)
@@ -54,16 +53,18 @@ for c in model.gui:
  if c.bone in board.pose.bones:board.pose.bones[c.bone].location=(0,0,0)
 board.pose.bones['CTRL_L_brow_raiseIn'].location.y=.8
 board.update_tag();bpy.context.view_layer.update()
-value=group.inputs['wm1.head_wm1_browsRaiseInner_L_msk'].default_value
+def brow_socket(group):
+ return next(s for s,n in materials.wrinkle_sockets(group) if n=='head_wm1_normal.head_wm1_browsRaiseInner_L')
+value=brow_socket(group).default_value
 assert value>0
 bpy.ops.wm.save_as_mainfile(filepath=str(ROOT/'work'/'materials_logan.blend'))
 dnaio.release_handle(instance);dnaio.release_handle(manager);dnaio.release_handle(reader)
 addon.unregister();bpy.ops.wm.open_mainfile(filepath=str(ROOT/'work'/'materials_logan.blend'))
 rig=bake.find_baked_rig(bpy.context);board=bpy.data.objects[rig[bake.RIG_KEY_BOARD_OBJECT]]
-head=next(m for m in bake.head_meshes(rig) if m.get('mm_mesh_kind')=='head');group=head.active_material.node_tree.nodes['DNA_WRINKLES']
-assert abs(group.inputs['wm1.head_wm1_browsRaiseInner_L_msk'].default_value-value)<1e-5
+head=next(m for m in bake.head_meshes(rig) if m.get('mm_mesh_kind')=='head');group=materials.wrinkle_node(head.active_material)
+assert abs(brow_socket(group).default_value-value)<1e-5
 board.pose.bones['CTRL_L_brow_raiseIn'].location.y=0;board.update_tag();bpy.context.view_layer.update()
-assert group.inputs['wm1.head_wm1_browsRaiseInner_L_msk'].default_value==0
+assert brow_socket(group).default_value==0
 addon.register()
 shared=bpy.data.objects.new('UNRELATED',None);bpy.context.scene.collection.objects.link(shared)
 assert bpy.ops.metamorphosis.remove_all()=={'FINISHED'}

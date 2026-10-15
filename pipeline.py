@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import bpy
 
-from . import bake, bakeplan, faceboard, optimize, organization
+from . import bake, bakeplan, faceboard, native_sums, optimize, organization
 from .logicmodel import RigLogicModel
 
 # quality -> (translation m, rotation rad, scale) error budget per channel at scale 0.01, use correctives (PSD)
@@ -12,7 +12,7 @@ QUALITY = {
     "LITE": ((3e-4, 1e-3, 5e-4), False),
 }
 QUALITY_ITEMS = [
-    ("LITE", "Lite", "Primary expressions, Lips Together and Jaw Open Extreme; other combination correctives are left out"),
+    ("LITE", "Lite", "Primary expressions with mouth/jaw combination correctives; other combination correctives are left out"),
 ]
 
 
@@ -80,21 +80,30 @@ def run_bake(
         skip_bones=skip,
     )
     optimize.optimize_plan(plan)
+    plan = native_sums.prepare_plan(plan)
     report.append("Compact native expressions; scaled partial sums preserve small facial movements.")
     if plan.stats["lips_together_correctives"]:
         report.append("Lips Together: retained jaw/lip closure correctives for all four controls.")
     if plan.stats["jaw_open_extreme_correctives"]:
         report.append("Jaw Open Extreme: retained extreme jaw opening and its mouth combinations.")
+    if plan.stats["mouth_combination_correctives"]:
+        report.append(f"Mouth combinations: retained {plan.stats['mouth_combination_correctives']} DNA correctives "
+                      "for combined smile, lip, stretch and jaw controls.")
     report.append(
         f"Lossless driver optimization: removed {plan.stats['optimized_drivers']} drivers "
         f"and {plan.stats['optimized_variables']} variables; quality settings unchanged."
     )
-    variables = sum(len(node.vars) for node in plan.nodes)
+    if plan.stats.get('native_sums'):
+        report.append(f"Native matrix evaluation: {plan.stats['native_sum_terms']} unchanged joint coefficients "
+                      f"evaluated in bulk; {plan.stats['expression_drivers']} expression drivers replaced "
+                      f"with {plan.stats['nodes']} drivers and a standalone Geometry Nodes graph.")
+    variables = sum(len(node.vars) for node in plan.nodes) + plan.stats.get('native_sum_inputs', 0)
     data_collection = organization.child_collection(collection, "RIGLOGICDATA")
     holders = [bake.create_data_object(data_collection, prefix, i) for i in range(bake.holders_needed(plan))]
     report.append(
-        f"Quality '{quality}': skipping {len(skip)} bones that deform nothing; creating {len(plan.nodes)} drivers "
-        f"with {variables} variables, {plan.stats['properties']} helper values on {len(holders)} data objects..."
+        f"Quality '{quality}': skipping {len(skip)} bones that deform nothing; creating {plan.stats['nodes']} drivers "
+        f"with {variables} variables, {plan.stats['properties']} helper properties "
+        f"on {len(holders) + (3 if plan.stats.get('native_sums') else 0)} data objects..."
     )
     bake.write_report(report)  # visible even if Blender is busy
     stats = bake.realize(

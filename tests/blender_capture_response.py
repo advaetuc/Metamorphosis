@@ -18,7 +18,7 @@ assert close['CTRL_C_jaw',1]==.6
 for side in 'LR':
  for part in 'UD':assert close[f'CTRL_{side}_mouth_lipsTogether{part}',1]==1
 assert close['CTRL_L_mouth_upperLipRaise',1]<.1
-for key,target in [('mouthPucker','towardsU'),('mouthRollUpper','lipBiteU'),('mouthPressLeft','tightenU'),('mouthPressLeft','lipsPressU')]:
+for key,target in [('mouthPucker','towardsU'),('mouthRollUpper','lipsRollU'),('mouthPressLeft','tightenU'),('mouthPressLeft','lipsPressU')]:
  assert face_board_pose({key:.7})['CTRL_L_mouth_'+target,1]>.3,(key,target)
 assert face_board_pose({'mouthPressLeft':.8},mirror=True)['CTRL_R_mouth_pressU',1]==1
 assert face_board_pose({'browInnerUp':.75})['CTRL_L_brow_raiseIn',1]==1

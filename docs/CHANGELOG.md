@@ -4,6 +4,67 @@
 
 Release notes describe each version at the time it was developed. For current setup instructions, use the README.
 
+## 1.2.2 — Native matrix evaluation
+
+- Move large joint sums from thousands of individual expression drivers to a
+  native Geometry Nodes field. Retain every rounded coefficient, all 413 mouth/jaw
+  correctives, existing raw pruning, and 10,000x intermediate scaling. GUI, raw,
+  PSD and wrinkle equations remain unchanged.
+- Keep playback standalone: the generated data needs no Python handler, driver
+  namespace function, installed add-on or extra dependency. Each driven bone
+  channel reads one evaluated matrix result through a simple native driver.
+- Rebuild preserves board values, actions and materials. Rebuild, rig toggling
+  and scoped cleanup handle the helper meshes, their input drivers and node group.
+- On the supplied corrected Logan scene in Blender 5.2, median dependency-graph
+  update time fell from **60.78 to 11.67 ms**, and drivers from **34,959 to 5,653**.
+  The largest mesh-coordinate difference across 32 poses was **0.00048 mm**.
+  Timing is scene/hardware dependent and excludes viewport shading.
+- Existing scenes need **Rebuild Drivers** after reloading the updated add-on.
+  `tests/blender_native_sums.py` compares the old/native equations and actual
+  skinned meshes, benchmarks both graphs, checks rebuild preservation/cleanup,
+  and tests saved action playback with the add-on unregistered.
+
+## 1.2.1 — Combined mouth deformation
+
+- Fix excessive stretching and cheek bulges when several mouth controls reach
+  maximum together. Lite had discarded their compensating DNA PSD combinations;
+  the reported scene had unique deformation driver targets, not competing overrides.
+- Retain mouth/jaw-dependent correctives, including mixed nose/cheek combinations,
+  while preserving the existing raw-expression pruning, Lite-only UI, helper scaling,
+  and omission of unrelated upper-face PSD and ML/RBF solvers.
+- Calibrate weighted mouth PSDs using targeted endpoint poses against native
+  RigLogic. Sparse samples alone could incorrectly select an unclamped product
+  for a corrective that saturates at 1.
+- Existing scenes receive the fix with **Rebuild Drivers**. Actions, board values
+  and material assignments are preserved. More native drivers are required, with
+  a corresponding playback cost; no new speed claim is made.
+- Regression coverage includes the supplied `Distored Pose.blend`, bilateral and
+  asymmetric maximum mouth controls, partial values, jaw combinations and mixed
+  nose/cheek poses. Saved-scene playback is checked with the add-on unregistered.
+
+## 1.2.0 — Shader organization and lip capture
+
+- Organize the head material into texture/output frames and a compact DNA_MATERIAL
+  group. Rename nested group sockets; keep the original wrinkle calculations and
+  all 41 native mask inputs inside the group. Group micro-normal mixing separately.
+- Use Blender 5.2's native DirectX normal convention. Blender 5.0 keeps an internal
+  conversion group for compatibility.
+- Bundle and pack the supplied universal teeth color/normal and eyelash alpha
+  textures alongside the existing skin detail maps. Eyelash coverage reads the
+  grayscale image, not its opaque PNG alpha channel.
+- Omit eye-shell and cartilage on new imports. Split eye edges into anatomical
+  left/right meshes while preserving UVs, custom normals and skin weights, and
+  assign the supplied side-specific procedural materials.
+- Show “MetaMorphosis DNA Addon” and “by TheClayMan3D” in the sidebar header.
+- Restore full inward lip-roll range and remove the competing automatic bite.
+  Suppress funnel/upper-raise/lower-depress inputs during closure; bilateral
+  roll/press can also drive a seal. Preserve jaw motion and existing takes.
+- Existing scenes can reapply materials. Reimport to receive the new eye mesh
+  structure; legacy combined eye edges receive a report warning.
+- Check skinned lip geometry on Ada, MH_BASE, Taro and Logan, native wrinkle
+  parity, split-eye UV/weight preservation, packed textures, reapplication,
+  standalone playback and cleanup. Real iPhone capture remains unverified.
+
 ## 1.0.10 — Phase 2
 
 - Choose the Unreal DCC export root (or its Maps folder) under Materials and Textures,

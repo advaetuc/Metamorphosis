@@ -1,8 +1,8 @@
 """Import the head meshes and the original facial deformation rig from a MetaHuman head DNA.
 
 This module creates geometry, skinning and the skeleton; materials.py handles optional
-textures and wrinkle drivers. Every DNA mesh becomes one object with one material slot, which is
-how MetaHuman splits meshes by material (head, teeth, saliva, eyeLeft, eyeRight, eyeshell, eyelashes ...).
+textures and wrinkle drivers. Eye shells/cartilage are omitted; eye edges are split by
+side for their procedural materials. UVs, normals and skin weights retain DNA ordering.
 """
 
 from __future__ import annotations
@@ -129,9 +129,12 @@ def _create_rig(reader, options: ImportOptions, collection: bpy.types.Collection
 
 
 def _create_mesh(
-    reader, mesh_index: int, mesh_name: str, options: ImportOptions, rig, collection, joint_names, result
+    reader, mesh_index: int, mesh_name: str, options: ImportOptions, rig, collection, joint_names, result,
+    side=None,
 ) -> bpy.types.Object:
     kind = _kind_of(mesh_name)
+    if side:
+        kind += '_'+side
     object_name = f"{options.prefix}_{kind}".upper()
     positions = _to_blender(
         np.asarray(reader.getVertexPositionXs(mesh_index), np.float64),
@@ -144,7 +147,23 @@ def _create_mesh(
     layout_to_normal = list(reader.getVertexLayoutNormalIndices(mesh_index))
 
     face_layouts = [list(reader.getFaceVertexLayoutIndices(mesh_index, f)) for f in range(reader.getFaceCount(mesh_index))]
-    faces = [tuple(layout_to_position[i] for i in layouts) for layouts in face_layouts]
+    vertex_indices = list(range(len(positions)))
+    if side:
+        # DNA X is anatomical left. Split whole disconnected eye-edge islands,
+        # never cut faces or regenerate their UVs/custom corner normals.
+        sign = 1 if side == 'L' else -1
+        vertex_indices = [i for i, p in enumerate(positions) if sign*p[0] > 0]
+        selected = set(vertex_indices)
+        for layouts in face_layouts:
+            count = sum(layout_to_position[i] in selected for i in layouts)
+            if 0 < count < len(layouts):
+                raise ValueError('Eye-edge face crosses the center plane; cannot split safely')
+        face_layouts = [ls for ls in face_layouts if all(layout_to_position[i] in selected for i in ls)]
+        if not face_layouts:
+            raise ValueError(f'No eye-edge faces on side {side}')
+    remap = {old: new for new, old in enumerate(vertex_indices)}
+    faces = [tuple(remap[layout_to_position[i]] for i in layouts) for layouts in face_layouts]
+    positions = positions[vertex_indices]
     loop_layout = [i for layouts in face_layouts for i in layouts]
 
     mesh = bpy.data.meshes.new(object_name)
@@ -194,9 +213,9 @@ def _create_mesh(
 
     # skin weights
     groups: dict[int, bpy.types.VertexGroup] = {}
-    for vertex in range(len(positions)):
-        joint_indices = reader.getSkinWeightsJointIndices(mesh_index, vertex)
-        weights = reader.getSkinWeightsValues(mesh_index, vertex)
+    for vertex, original_vertex in enumerate(vertex_indices):
+        joint_indices = reader.getSkinWeightsJointIndices(mesh_index, original_vertex)
+        weights = reader.getSkinWeightsValues(mesh_index, original_vertex)
         for joint, weight in zip(joint_indices, weights):
             if weight <= 0.0:
                 continue
@@ -208,6 +227,8 @@ def _create_mesh(
     obj.parent = rig
     modifier = obj.modifiers.new(name="Armature", type="ARMATURE")
     modifier.object = rig
+    obj['mm_head_mesh'] = True
+    obj['mm_mesh_kind'] = kind
 
     return obj
 
@@ -233,11 +254,13 @@ def import_head(reader, options: ImportOptions) -> ImportResult:
         raise RuntimeError(f"The DNA file has no meshes for LOD{options.lod}")
     for mesh_index in lod_meshes:
         mesh_name = str(reader.getMeshName(mesh_index))
+        kind = re.sub(r'[^a-z]', '', _kind_of(mesh_name).lower())
+        if kind in {'eyeshell', 'cartilage', 'eyecartilage'}:
+            continue
         try:
-            obj = _create_mesh(reader, mesh_index, mesh_name, options, result.rig, mesh_collection, joint_names, result)
-            result.meshes.append(obj)
-            obj["mm_head_mesh"] = True
-            obj['mm_mesh_kind'] = _kind_of(mesh_name)
+            for side in (('L', 'R') if kind == 'eyeedge' else (None,)):
+                obj = _create_mesh(reader, mesh_index, mesh_name, options, result.rig, mesh_collection, joint_names, result, side)
+                result.meshes.append(obj)
         except Exception as error:  # noqa: BLE001 - keep importing the other meshes
             logger.exception("Mesh '%s' failed", mesh_name)
             result.warnings.append(f"Mesh '{mesh_name}' failed to import: {error}")

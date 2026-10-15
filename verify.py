@@ -142,6 +142,55 @@ def attribute_errors(ours: np.ndarray, reference: np.ndarray, mask: np.ndarray) 
 
 
 # ------------------------------------------------------------------ calibration
+def mouth_psd_probes(model: RigLogicModel) -> np.ndarray:
+    """Exercise weighted mouth PSDs above saturation, not just sparse random poses.
+
+    At small values a weighted product and a clamped product are indistinguishable.
+    Construct endpoint combinations from the DNA's own GUI-to-raw table so the
+    native oracle can decide which formula is correct at maximum control values.
+    """
+    groups = {k: (cols, weights) for k, cols, weights in
+              (model.psd_groups(model.psd_base_auto) or [])}
+    ranges = model.gui_ranges()
+    choices = {}
+    for g, raw, low, high, slope, cut in zip(model.g2r_in, model.g2r_out, model.g2r_from,
+                                           model.g2r_to, model.g2r_slope, model.g2r_cut):
+        for x in (max(low, ranges[g,0]), min(high, ranges[g,1])):
+            value = x*slope+cut
+            if low <= x <= high and value > choices.get(int(raw), (0,None,None))[0]:
+                choices[int(raw)] = (value, int(g), float(x))
+    def raw_dependencies(col, seen):
+        if col < model.raw_count:
+            return {int(col)}
+        if col in seen:
+            return set()
+        entry = groups.get(int(col)-model.raw_count)
+        if entry is None:
+            return set()
+        return set().union(*(raw_dependencies(c, seen|{col}) for c in entry[0]))
+    probes = {}
+    for k, (cols, weights) in groups.items():
+        if abs(float(np.prod(weights))) <= 1:
+            continue
+        sources = set().union(*(raw_dependencies(c, set()) for c in cols))
+        if not any(model.raw_names[c].rsplit('.',1)[-1].startswith(('mouth','jaw')) for c in sources):
+            continue
+        settings = {}
+        for c in sorted(sources):
+            if c not in choices:
+                break
+            _, g, x = choices[c]
+            if g in settings and settings[g] != x:
+                break  # Mutually exclusive raw controls cannot activate together.
+            settings[g] = x
+        else:
+            for strength in (.25,.6,1):
+                p = np.zeros(len(model.gui))
+                for g,x in settings.items():p[g] = x*strength
+                probes[tuple(p)] = p
+    return np.array(list(probes.values())).reshape(-1,len(model.gui))
+
+
 def calibrate_raw_clamps(model: RigLogicModel, gui, raw_default, oracle: Oracle, details: list) -> None:
     """Per raw control: pick the clamp (none, [0,1], ...) that reproduces the oracle's raw values."""
     if oracle.raw is None:
@@ -278,7 +327,22 @@ def verify_model(model: RigLogicModel, riglogic, reader, release=None) -> Verify
 
     # ---- stage 2 + candidates
     candidates = list(model.variants())
-    fitted = fit_psd_modes(model, oracle)
+    fit_oracle = oracle
+    probes = mouth_psd_probes(model)
+    if len(probes) and oracle.raw is not None and oracle.psd is not None:
+        try:
+            stress = run_oracle(model, riglogic, reader, probes,
+                                np.tile(model.default_raw(), (len(probes),1)), release)
+            if stress.raw is not None and stress.psd is not None:
+                fit_oracle = Oracle(joints=oracle.joints, blendshapes=[], notes=[],
+                    raw=np.vstack([oracle.raw,stress.raw]), psd=np.vstack([oracle.psd,stress.psd]),
+                    extra=np.vstack([oracle.extra,stress.extra]) if oracle.extra is not None and stress.extra is not None else None)
+                details.append(f"Mouth PSD saturation: {len(probes)} targeted native calibration poses.")
+        except Exception as error:  # Cannot safely guess saturation from unobserved values.
+            result.status = 'failed'
+            result.message = f'Mouth corrective calibration failed: {error}'
+            return result
+    fitted = fit_psd_modes(model, fit_oracle)
     if fitted is not None:
         variant, modes, total = fitted
         model.psd_mode_map = modes

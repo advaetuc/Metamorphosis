@@ -23,7 +23,8 @@ from .logicmodel import RigLogicModel, Variant
 @dataclass(frozen=True)
 class Var:
     """A driver variable. ``kind``: ``prop`` (data-empty property), ``loc`` (face-board bone
-    location axis) or ``quat`` (bone rotation_quaternion component)."""
+    location axis), ``quat`` (bone rotation_quaternion component), or ``geometry``
+    (evaluated matrix-output point)."""
 
     name: str
     kind: str
@@ -49,6 +50,9 @@ class Plan:
     shape_props: dict[int, str] = field(default_factory=dict)  # blend shape channel -> property to follow
     warnings: list[str] = field(default_factory=list)
     stats: dict = field(default_factory=dict)
+    # The same rounded linear equations as the channel drivers, in bone units.
+    # Large rigs can evaluate these in a native Geometry Nodes field instead.
+    linear_channels: list = field(default_factory=list)  # (target, [(property or None, coefficient)])
 
 
 def gui_prop(index: int) -> str:
@@ -303,6 +307,19 @@ def jaw_open_extreme_columns(model: RigLogicModel, variant: Variant) -> set[int]
     return _dependent_psd_columns(model, variant, {"jawOpenExtreme"})
 
 
+def mouth_combination_columns(model: RigLogicModel, variant: Variant) -> set[int]:
+    """Retain DNA corrections for interacting mouth/jaw controls in Lite.
+
+    Primary mouth expressions are not independently additive: bilateral raises,
+    smiles, stretches and their cross-combinations need compensating PSD weights.
+    Follow dependencies so mixed nose/cheek/jaw combinations are included too,
+    without enabling unrelated upper-face PSD, ML or RBF solvers.
+    """
+    names = {name.rsplit('.', 1)[-1] for name in model.raw_names
+             if name.rsplit('.', 1)[-1].startswith(('mouth', 'jaw'))}
+    return _dependent_psd_columns(model, variant, names)
+
+
 def build_plan(
     model: RigLogicModel,
     variant: Variant,
@@ -324,8 +341,8 @@ def build_plan(
         budget: per attribute type (translation m, rotation rad, scale) the largest total error that may be
             dropped from one channel. Weights are removed smallest-first while the sum of the removed
             absolute weights stays within the budget (worst case, with every control at 1.0).
-        use_psd: ``False`` drops combination correctives except those required by
-            Lips Together and Jaw Open Extreme controls ("Lite").
+        use_psd: ``False`` retains mouth/jaw combination correctives, including
+            Lips Together and Jaw Open Extreme; other PSD stays omitted ("Lite").
         face_board_bones: names of the face-board bones that exist; ``None`` means "assume all".
         shape_channels: blend shape channel indices that exist as shape keys in Blender.
         skip_bones: bones that must not be driven (RigLogic inputs, i.e. the quaternion bones).
@@ -342,7 +359,8 @@ def build_plan(
     matrix = model.matrix.astype(np.float64)
     lip_columns = lips_together_columns(model, variant) if not use_psd else set()
     jaw_columns = jaw_open_extreme_columns(model, variant) if not use_psd else set()
-    retained_columns = lip_columns | jaw_columns
+    mouth_columns = mouth_combination_columns(model, variant) if not use_psd else set()
+    retained_columns = lip_columns | jaw_columns | mouth_columns
     if not use_psd:
         matrix = matrix.copy()
         matrix[:, model.raw_count :] = 0.0
@@ -412,19 +430,25 @@ def build_plan(
     # then the bone channels
     for bone, path, index, cols, weights, const in channel_plans:
         terms = []
+        linear_terms = []
         # Blender's native writes ignore tiny changes around 1e-4, including
         # helper properties. Store weighted partial sums at larger magnitudes so
         # repartitioning a sum does not discard sub-millimetre lip motion.
         # Restore the original units only at the final bone channel.
         output_scale = 10000.0
         if abs(const) > 1e-9:
-            terms.append((fmt_num(float(fmt_num(const, 6)) * output_scale, 6), []))
+            coefficient = fmt_num(float(fmt_num(const, 6)) * output_scale, 6)
+            terms.append((coefficient, []))
+            linear_terms.append((None, float(coefficient) / output_scale))
         for col, w in zip(cols.tolist(), weights.tolist()):
             precision = 6 if col in retained_columns else 4
             coefficient = fmt_num(float(fmt_num(w, precision)) * output_scale, precision)
-            terms.append((f"{coefficient}*{{0}}", [builder.ensure_u(int(col))]))
+            prop = builder.ensure_u(int(col))
+            terms.append((f"{coefficient}*{{0}}", [prop]))
+            linear_terms.append((prop, float(coefficient) / output_scale))
         if not terms:
             continue
+        plan.linear_channels.append((("bone", bone, path, index), linear_terms))
         builder.emit_chunked(
             terms, "+", ("bone", bone, path, index), "channel", lambda vn, key: Var(vn, "prop", key),
             output_scale=output_scale,
@@ -446,6 +470,7 @@ def build_plan(
         "gui_controls": len(builder.gui_nodes_done),
         "lips_together_correctives": len(lip_columns & needed_cols),
         "jaw_open_extreme_correctives": len(jaw_columns & needed_cols),
+        "mouth_combination_correctives": len(mouth_columns & needed_cols),
     }
     return plan
 
@@ -460,6 +485,7 @@ def evaluate_plan(plan: Plan, loc: dict, quat: dict | None = None) -> dict:
     quat = quat or {}
     props = dict(plan.props)
     results = {}
+    geometry_values = None
     for node in plan.nodes:
         values = {}
         for var in node.vars:
@@ -467,6 +493,12 @@ def evaluate_plan(plan: Plan, loc: dict, quat: dict | None = None) -> dict:
                 values[var.name] = props[var.ref]
             elif var.kind == "loc":
                 values[var.name] = float(loc.get((var.ref, var.index), 0.0))
+            elif var.kind == "geometry":
+                if geometry_values is None:
+                    geometry_values = [10000 * sum(weight * (1.0 if key is None else props[key])
+                                                   for key, weight in terms)
+                                       for _, terms in plan.linear_channels]
+                values[var.name] = geometry_values[var.index]
             else:
                 values[var.name] = float(quat.get((var.ref, var.index), 1.0 if var.index == 0 else 0.0))
         if node.dtype == "SUM":

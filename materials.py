@@ -11,6 +11,9 @@ from .exprplan import fmt_num
 from .logicmodel import RigLogicModel
 
 ASSET = Path(__file__).parent / 'assets' / 'wrinkle_materials.blend'
+EYE_EDGE_ASSET = ASSET.with_name('eye_edge_materials.blend')
+UNIVERSAL_TEXTURES = ('Teeth_Color.png', 'Teeth_Normal.png', 'EyeLashes_Alpha.PNG',
+                      'T_SkinMicroNormal.PNG', 'T_SkinMicro3_N.PNG')
 
 
 def caps(name):
@@ -69,6 +72,12 @@ def texture_files(folder):
                     files.setdefault(file.stem.lower(), file)
     if 'head_basecolor' not in files:
         raise ValueError('Head_Basecolor texture not found in the selected export')
+    # These maps are shared by all characters and never require an external path.
+    for name in UNIVERSAL_TEXTURES:
+        path = ASSET.parent/name
+        if not path.is_file():
+            raise ValueError(f'Bundled material texture is missing: {name}')
+        files[path.stem.lower()] = path
     return files
 
 
@@ -95,20 +104,34 @@ def texture(tree, files, key, color=False, x=-900, y=0):
 
 
 def normal(tree, source, bsdf, x=-200, y=-200):
-    # Unreal exports DirectX tangent normals; Blender expects an inverted green channel.
-    separate = node(tree, 'ShaderNodeSeparateXYZ', 'NORMAL_CHANNELS', x-400, y)
-    flip = node(tree, 'ShaderNodeMath', 'DIRECTX_GREEN_FLIP', x-200, y-140)
-    flip.operation = 'SUBTRACT'; flip.inputs[0].default_value = 1
-    combine = node(tree, 'ShaderNodeCombineXYZ', 'OPENGL_NORMAL', x, y)
-    n = node(tree, 'ShaderNodeNormalMap', 'TANGENT_NORMAL', x+180, y)
+    n = node(tree, 'ShaderNodeNormalMap', 'TANGENT_NORMAL', x, y)
     n.uv_map = 'UVMap'
-    tree.links.new(source, separate.inputs[0])
-    tree.links.new(separate.outputs['X'], combine.inputs['X'])
-    tree.links.new(separate.outputs['Y'], flip.inputs[1])
-    tree.links.new(flip.outputs[0], combine.inputs['Y'])
-    tree.links.new(separate.outputs['Z'], combine.inputs['Z'])
-    tree.links.new(combine.outputs[0], n.inputs['Color'])
-    tree.links.new(n.outputs[0], bsdf.inputs['Normal'])
+    if hasattr(n, 'convention'):
+        n.convention = 'DIRECTX'
+    else:
+        # Only older supported Blender versions need this compatibility group.
+        legacy = bpy.data.node_groups.new('MM_LEGACY_DIRECTX', 'ShaderNodeTree')
+        legacy.interface.new_socket(name='DIRECTX_COLOR', in_out='INPUT', socket_type='NodeSocketColor')
+        legacy.interface.new_socket(name='OPENGL_COLOR', in_out='OUTPUT', socket_type='NodeSocketColor')
+        entry = node(legacy, 'NodeGroupInput', 'INPUT', -600)
+        separate = node(legacy, 'ShaderNodeSeparateXYZ', 'CHANNELS', -400)
+        flip = node(legacy, 'ShaderNodeMath', 'INVERT_GREEN', -200, -140)
+        flip.operation = 'SUBTRACT'; flip.inputs[0].default_value = 1
+        combine = node(legacy, 'ShaderNodeCombineXYZ', 'NORMAL_COLOR', 0)
+        out = node(legacy, 'NodeGroupOutput', 'OUTPUT', 200)
+        legacy.links.new(entry.outputs[0], separate.inputs[0])
+        legacy.links.new(separate.outputs['X'], combine.inputs['X'])
+        legacy.links.new(separate.outputs['Y'], flip.inputs[1])
+        legacy.links.new(flip.outputs[0], combine.inputs['Y'])
+        legacy.links.new(separate.outputs['Z'], combine.inputs['Z'])
+        legacy.links.new(combine.outputs[0], out.inputs[0])
+        convert = node(tree, 'ShaderNodeGroup', 'LEGACY_NORMAL_CONVENTION', x-220, y)
+        convert.node_tree = legacy
+        tree.links.new(source, convert.inputs[0])
+        source = convert.outputs[0]
+    tree.links.new(source, n.inputs['Color'])
+    if bsdf is not None:
+        tree.links.new(n.outputs[0], bsdf.inputs['Normal'])
     return n
 
 
@@ -167,11 +190,7 @@ def realize_wrinkles(reader, model, variant, rig, board, group, collection, pref
         holder, index = lookup[n.target[1]]
         bake._add_driver(holder, '["mm_values"]', index, n, holder_of=lookup,
                          rig=rig, board=board, counters=counts)
-    for socket in group.inputs:
-        if '.head_' not in socket.name:
-            continue
-        wm, mask = socket.name.split('.', 1)
-        name = f'head_{wm}_normal.'+mask.removesuffix('_msk')
+    for socket, name in wrinkle_sockets(group):
         prop = outputs.get(name)
         socket.default_value = 0
         if prop:
@@ -199,6 +218,17 @@ def load_wrinkles(prefix):
         seen.add(group)
         group.name = caps(prefix+'_'+group.name)
         group.use_fake_user = False
+        original = {}
+        counts = {}
+        for socket in group.interface.items_tree:
+            if socket.item_type != 'SOCKET':
+                continue
+            original[socket.identifier] = socket.name
+            name = {'cm_base':'BASE_COLOR', 'wm_base':'BASE_NORMAL',
+                    'Color':'COLOR', 'Normal':'NORMAL', 'Mask':'MASK'}.get(socket.name, caps(socket.name))
+            counts[name] = counts.get(name, 0)+1
+            socket.name = name if counts[name] == 1 else f'{name}_{counts[name]:02d}'
+        group['mm_original_sockets'] = json.dumps(original)
         for n in group.nodes:
             if n.type == 'GROUP':
                 rename(n.node_tree)
@@ -206,57 +236,208 @@ def load_wrinkles(prefix):
     return root
 
 
-def skin(tree, bsdf, files, scale):
+def wrinkle_sockets(group):
+    """DNA names stay independent of presentation names and interface order."""
+    original = json.loads(group.node_tree.get('mm_original_sockets', '{}'))
+    for socket in group.inputs:
+        name = original.get(socket.identifier, socket.name)
+        if '.head_' in name:
+            wm, mask = name.split('.', 1)
+            yield socket, f'head_{wm}_normal.'+mask.removesuffix('_msk')
+
+
+def wrinkle_node(material):
+    surface = material.node_tree.nodes.get('DNA_MATERIAL')
+    return surface.node_tree.nodes.get('DNA_WRINKLES') if surface else material.node_tree.nodes.get('DNA_WRINKLES')
+
+
+def socket(tree, name, kind, direction='INPUT', default=None):
+    s = tree.interface.new_socket(name=name, in_out=direction, socket_type='NodeSocket'+kind)
+    if default is not None:
+        s.default_value = default
+    return s
+
+
+def detail_group(prefix, files):
+    """Keep tiling/mixing and tangent-space detail out of the main material view."""
+    tree = bpy.data.node_groups.new(caps(prefix+'_SKIN_DETAIL'), 'ShaderNodeTree')
+    socket(tree, 'BASE_NORMAL', 'Vector')
+    socket(tree, 'DETAIL_STRENGTH', 'Float', default=.15)
+    socket(tree, 'DETAIL_TILING', 'Float', default=20)
+    socket(tree, 'NORMAL', 'Vector', 'OUTPUT')
+    entry = node(tree, 'NodeGroupInput', 'INPUT', -1200, 350)
+    out = node(tree, 'NodeGroupOutput', 'OUTPUT', 850, 100)
+    uv = node(tree, 'ShaderNodeTexCoord', 'DETAIL_UV', -1200, -100)
+    mapping = node(tree, 'ShaderNodeVectorMath', 'DETAIL_TILING', -1000, -100)
+    mapping.operation = 'SCALE'
+    tree.links.new(uv.outputs['UV'], mapping.inputs[0])
+    tree.links.new(entry.outputs['DETAIL_TILING'], mapping.inputs['Scale'])
+    a = texture(tree, files, 'T_SkinMicroNormal', x=-750, y=100)
+    b = texture(tree, files, 'T_SkinMicro3_N', x=-750, y=-250)
+    mix = node(tree, 'ShaderNodeMixRGB', 'MICRO_DETAIL_BLEND', -450, 100)
+    mix.inputs[0].default_value = .5
+    for image, index in ((a, 1), (b, 2)):
+        tree.links.new(mapping.outputs[0], image.inputs['Vector'])
+        tree.links.new(image.outputs['Color'], mix.inputs[index])
+    micro = normal(tree, mix.outputs[0], None, -200, 100)
+    tree.links.new(entry.outputs['DETAIL_STRENGTH'], micro.inputs['Strength'])
+    delta = node(tree, 'ShaderNodeVectorMath', 'DETAIL_NORMAL_DELTA', 50, 100)
+    delta.operation = 'SUBTRACT'
+    geom = node(tree, 'ShaderNodeNewGeometry', 'SURFACE_NORMAL', -200, -200)
+    tree.links.new(micro.outputs[0], delta.inputs[0])
+    tree.links.new(geom.outputs['Normal'], delta.inputs[1])
+    total = node(tree, 'ShaderNodeVectorMath', 'COMBINED_NORMAL', 300, 100)
+    total.operation = 'ADD'
+    tree.links.new(entry.outputs['BASE_NORMAL'], total.inputs[0])
+    tree.links.new(delta.outputs[0], total.inputs[1])
+    unit = node(tree, 'ShaderNodeVectorMath', 'NORMALIZE_DETAIL', 550, 100)
+    unit.operation = 'NORMALIZE'
+    tree.links.new(total.outputs[0], unit.inputs[0])
+    tree.links.new(unit.outputs[0], out.inputs['NORMAL'])
+    return tree
+
+
+HEAD_INPUTS = (('BASE_COLOR', 'cm_base'), ('COLOR_WRINKLE_1', 'cm1'),
+               ('COLOR_WRINKLE_2', 'cm2'), ('COLOR_WRINKLE_3', 'cm3'),
+               ('BASE_NORMAL', 'wm_base'), ('NORMAL_WRINKLE_1', 'wm1'),
+               ('NORMAL_WRINKLE_2', 'wm2'), ('NORMAL_WRINKLE_3', 'wm3'))
+
+
+def head_group(prefix, files, animated):
+    tree = bpy.data.node_groups.new(caps(prefix+'_DNA_MATERIAL'), 'ShaderNodeTree')
+    for name, _ in HEAD_INPUTS:
+        socket(tree, name, 'Color', default=(.5,.5,1,1) if 'NORMAL' in name else (.5,.5,.5,1))
+    socket(tree, 'SPECULAR_ROUGHNESS_METALLIC', 'Color', default=(.5,.45,0,1))
+    socket(tree, 'FUZZ_MASK', 'Float', default=0)
+    socket(tree, 'DETAIL_STRENGTH', 'Float', default=.15)
+    socket(tree, 'DETAIL_TILING', 'Float', default=20)
+    for name, kind in (('COLOR','Color'), ('NORMAL','Vector'), ('SPECULAR','Float'),
+                       ('ROUGHNESS','Float'), ('METALLIC','Float'), ('SHEEN','Float')):
+        socket(tree, name, kind, 'OUTPUT')
+    entry = node(tree, 'NodeGroupInput', 'TEXTURES_AND_SETTINGS', -700, 300)
+    entry.width = 260
+    out = node(tree, 'NodeGroupOutput', 'SURFACE_CHANNELS', 600, 300)
+    color, norm = entry.outputs['BASE_COLOR'], entry.outputs['BASE_NORMAL']
+    weights = None
+    if animated:
+        weights = node(tree, 'ShaderNodeGroup', 'DNA_WRINKLES', -350, 300)
+        weights.node_tree = load_wrinkles(prefix)
+        original = json.loads(weights.node_tree['mm_original_sockets'])
+        inputs = {original[s.identifier]: s for s in weights.inputs}
+        for name, original_name in HEAD_INPUTS:
+            tree.links.new(entry.outputs[name], inputs[original_name])
+        for s, _ in wrinkle_sockets(weights):
+            s.hide = True
+        weights.width = 230
+        color, norm = weights.outputs['COLOR'], weights.outputs['NORMAL']
+    tree.links.new(color, out.inputs['COLOR'])
+    tangent = normal(tree, norm, None, -70, 100)
+    detail = node(tree, 'ShaderNodeGroup', 'SKIN_DETAIL', 170, 100)
+    detail.node_tree = detail_group(prefix, files)
+    tree.links.new(tangent.outputs[0], detail.inputs['BASE_NORMAL'])
+    for name in ('DETAIL_STRENGTH', 'DETAIL_TILING'):
+        tree.links.new(entry.outputs[name], detail.inputs[name])
+    tree.links.new(detail.outputs['NORMAL'], out.inputs['NORMAL'])
+    packed = node(tree, 'ShaderNodeSeparateColor', 'SRMF_CHANNELS', -350, -300)
+    tree.links.new(entry.outputs['SPECULAR_ROUGHNESS_METALLIC'], packed.inputs[0])
+    for channel, name in (('Red','SPECULAR'), ('Green','ROUGHNESS'), ('Blue','METALLIC')):
+        tree.links.new(packed.outputs[channel], out.inputs[name])
+    fuzz = node(tree, 'ShaderNodeMath', 'FUZZ_STRENGTH', -70, -300)
+    fuzz.operation = 'MULTIPLY'; fuzz.inputs[1].default_value = .15
+    tree.links.new(entry.outputs['FUZZ_MASK'], fuzz.inputs[0])
+    tree.links.new(fuzz.outputs[0], out.inputs['SHEEN'])
+    return tree, weights
+
+
+def frame(tree, title, children, location):
+    f = node(tree, 'NodeFrame', title, *location)
+    f.label = title.replace('_', ' ')
+    f.use_custom_color = True; f.color = (.12,.16,.20)
+    f.label_size = 22
+    for child, x, y in children:
+        if child:
+            child.parent = f
+            child.location = (x, y)
+            child.width = 220
+    return f
+
+
+def head_material(tree, bsdf, files, prefix, scale):
     bsdf.inputs['Subsurface Weight'].default_value = .4
-    bsdf.inputs['Subsurface Radius'].default_value = (1, .35, .2)
-    bsdf.inputs['Subsurface Scale'].default_value = .005 * scale/.01
+    bsdf.inputs['Subsurface Radius'].default_value = (1, .2, .1)
+    bsdf.inputs['Subsurface Scale'].default_value = .005*scale/.01
     bsdf.inputs['IOR'].default_value = 1.4
-    bsdf.inputs['Roughness'].default_value = .45
-    packed = texture(tree, files, 'Head_SRMF', x=-900, y=-600)
+    g = node(tree, 'ShaderNodeGroup', 'DNA_MATERIAL', 0, 300)
+    g.width = 280
+    animated = all(f'head_normal_animated_wm{i}' in files for i in (1,2,3)) and 'head_normal' in files and ASSET.is_file()
+    g.node_tree, weights = head_group(prefix, files, animated)
+    base = texture(tree, files, 'Head_Basecolor', True)
+    norm = texture(tree, files, 'Head_Normal')
+    packed = texture(tree, files, 'Head_SRMF')
+    tree.links.new(base.outputs['Color'], g.inputs['BASE_COLOR'])
+    if norm:
+        tree.links.new(norm.outputs['Color'], g.inputs['BASE_NORMAL'])
     if packed:
-        separate = node(tree, 'ShaderNodeSeparateColor', 'SRMF_CHANNELS', -600, -650)
-        tree.links.new(packed.outputs['Color'], separate.inputs['Color'])
-        for source, target in [('Red','Specular IOR Level'),('Green','Roughness'),('Blue','Metallic')]:
-            tree.links.new(separate.outputs[source], bsdf.inputs[target])
-        fuzz = node(tree, 'ShaderNodeMath', 'FUZZ_STRENGTH', -350, -650)
-        fuzz.operation = 'MULTIPLY'; fuzz.inputs[1].default_value = .15
-        tree.links.new(packed.outputs['Alpha'], fuzz.inputs[0])
-        tree.links.new(fuzz.outputs[0], bsdf.inputs['Sheen Weight'])
-    # Optional user-provided tiling detail maps; preserve the main wrinkle normal.
-    files = dict(files)
-    for key in ('T_SkinMicroNormal','T_SkinMicro3_N'):
-        bundled = ASSET.parent/(key+'.PNG')
-        if bundled.is_file():
-            files.setdefault(key.lower(),bundled)
-    detail = texture(tree, files, 'T_SkinMicroNormal', x=-900, y=-1100)
-    if detail:
-        uv = node(tree, 'ShaderNodeTexCoord', 'DETAIL_UV', -1350, -1100)
-        mapping = node(tree, 'ShaderNodeVectorMath', 'DETAIL_TILING', -1150, -1100)
-        mapping.operation = 'SCALE'; mapping.inputs['Scale'].default_value = 20
-        tree.links.new(uv.outputs['UV'], mapping.inputs[0])
-        tree.links.new(mapping.outputs[0], detail.inputs['Vector'])
-        previous = bsdf.inputs['Normal'].links[0].from_socket if bsdf.inputs['Normal'].is_linked else None
-        second = texture(tree,files,'T_SkinMicro3_N',x=-900,y=-1400)
-        source = detail.outputs['Color']
-        if second:
-            tree.links.new(mapping.outputs[0],second.inputs['Vector'])
-            mix = node(tree,'ShaderNodeMixRGB','MICRO_DETAIL_BLEND',-650,-1300)
-            mix.inputs[0].default_value = .5
-            tree.links.new(source,mix.inputs[1]);tree.links.new(second.outputs['Color'],mix.inputs[2])
-            source = mix.outputs[0]
-        micro = normal(tree, source, bsdf, x=-450, y=-1100)
-        micro.inputs['Strength'].default_value = .15
-        if previous:
-            add = node(tree, 'ShaderNodeVectorMath', 'DETAIL_NORMAL_DELTA', 0, -1100)
-            add.operation = 'SUBTRACT'
-            geom = node(tree, 'ShaderNodeNewGeometry', 'SURFACE_NORMAL', -250, -1300)
-            tree.links.new(micro.outputs[0], add.inputs[0]); tree.links.new(geom.outputs['Normal'], add.inputs[1])
-            total = node(tree, 'ShaderNodeVectorMath', 'COMBINED_NORMAL', 220, -900)
-            total.operation = 'ADD'
-            tree.links.new(previous,total.inputs[0]); tree.links.new(add.outputs[0],total.inputs[1])
-            unit = node(tree, 'ShaderNodeVectorMath', 'NORMALIZE_DETAIL', 420, -900)
-            unit.operation = 'NORMALIZE'
-            tree.links.new(total.outputs[0],unit.inputs[0]); tree.links.new(unit.outputs[0],bsdf.inputs['Normal'])
+        tree.links.new(packed.outputs['Color'], g.inputs['SPECULAR_ROUGHNESS_METALLIC'])
+        tree.links.new(packed.outputs['Alpha'], g.inputs['FUZZ_MASK'])
+    frame(tree, 'BASE_TEXTURES', [(base,0,0),(norm,260,0),(packed,520,0)], (-1100,350))
+    colors, normals = [], []
+    if animated:
+        for i in (1,2,3):
+            cm = texture(tree, files, f'Head_Basecolor_Animated_CM{i}', True)
+            wm = texture(tree, files, f'Head_Normal_Animated_WM{i}')
+            tree.links.new((cm or base).outputs['Color'], g.inputs[f'COLOR_WRINKLE_{i}'])
+            tree.links.new(wm.outputs['Color'], g.inputs[f'NORMAL_WRINKLE_{i}'])
+            colors.append((cm,(i-1)*260,0)); normals.append((wm,(i-1)*260,0))
+        frame(tree, 'COLOR_WRINKLES', colors, (-1100,780))
+        frame(tree, 'NORMAL_WRINKLES', normals, (-1100,-80))
+    else:
+        for name, _ in HEAD_INPUTS:
+            if 'WRINKLE' in name:
+                g.inputs[name].hide = True
+    for source, target in (('COLOR','Base Color'), ('NORMAL','Normal'), ('SPECULAR','Specular IOR Level'),
+                           ('ROUGHNESS','Roughness'), ('METALLIC','Metallic'), ('SHEEN','Sheen Weight')):
+        tree.links.new(g.outputs[source], bsdf.inputs[target])
+    return weights
+
+
+def eye_edge_material(prefix, side):
+    with bpy.data.libraries.load(str(EYE_EDGE_ASSET), link=False) as (_, target):
+        target.materials = ['MM_EYE_EDGE_'+side]
+    mat = target.materials[0]
+    mat.name = caps(prefix+'_EYE_EDGE_'+side)
+    mat.use_fake_user = False
+    tree = mat.node_tree
+    # Keep the supplied side-specific ramps/mapping and surface values intact.
+    bsdf = next(n for n in tree.nodes if n.type == 'BSDF_PRINCIPLED')
+    if 'Thin Wall' in bsdf.inputs:
+        bsdf.inputs['Thin Wall'].default_value = True
+    # The supplied 5.2 material uses DIRECTX. The portable 5.0 library cannot
+    # store that enum, so restore it (or its compatibility group) on append.
+    original_normal = next(n for n in tree.nodes if n.type == 'NORMAL_MAP')
+    source = original_normal.inputs['Color'].links[0].from_socket
+    strength = original_normal.inputs['Strength'].default_value
+    tree.nodes.remove(original_normal)
+    tangent = normal(tree, source, bsdf)
+    tangent.name = 'Normal Map'
+    tangent.inputs['Strength'].default_value = strength
+    for n in tree.nodes:
+        if n.type == 'NORMAL_MAP':
+            n.uv_map = 'UVMap'
+        if n.type == 'TEX_IMAGE':
+            n.image.pack()
+        n.name = n.label = caps(n.name)
+    frame(tree, 'PROCEDURAL_EDGE_FADE', [(tree.nodes[name],i*240,0) for i,name in enumerate(
+        ('TEXTURE_COORDINATE','MAPPING','GRADIENT_TEXTURE','COLOR_RAMP'))], (-1100,450))
+    details = ['TEXTURE_COORDINATE_001','MAPPING_001','IMAGE_TEXTURE']
+    if 'LEGACY_NORMAL_CONVENTION' in tree.nodes:
+        details.append('LEGACY_NORMAL_CONVENTION')
+    details.append('NORMAL_MAP')
+    frame(tree, 'SURFACE_DETAIL', [(tree.nodes[name],i*240,0) for i,name in enumerate(details)], (-1100,-50))
+    bsdf.location = (400,450); bsdf.width = 240
+    output = next(n for n in tree.nodes if n.type == 'OUTPUT_MATERIAL')
+    output.location = (750,450)
+    return mat
 
 
 def setup(reader, model, variant, rig, board, meshes, folder, collection, prefix, lod=0):
@@ -276,46 +457,43 @@ def setup(reader, model, variant, rig, board, meshes, folder, collection, prefix
             elif 'eyeleft' in kind or 'eyeright' in kind:
                 category, color, norm = caps(kind), 'Eyes_Color', 'Eyes_Normal'
             elif 'eyelash' in kind:
-                category, color, norm = 'EYELASHES', 'Eyelashes_Color', ''
+                category, color, norm = 'EYELASHES', '', ''
+            elif kind in {'eyeedge_l', 'eyeedge_r'}:
+                mat = eye_edge_material(prefix, kind[-1].upper())
+                mat['mm_material_version'] = '1.2.0'
+                assignments.append((mesh, mat))
+                continue
             elif 'eyeshell' in kind or 'saliva' in kind or 'eyeedge' in kind:
                 category, color, norm = caps(kind), '', ''
+                if 'eyeedge' in kind:
+                    warnings.append('Legacy combined eye-edge mesh: reimport DNA for separate left/right procedural eye edges')
             else:
                 warnings.append(f'No material preset for {mesh.name}; existing slots preserved')
                 continue
             mat = bpy.data.materials.new(caps(prefix+'_'+category))
-            mat['mm_material_version'] = '1.0.10'
+            mat['mm_material_version'] = '1.2.0'
             tree = mat.node_tree
             tree.nodes.clear()
-            bsdf = node(tree, 'ShaderNodeBsdfPrincipled', category+'_SURFACE', 700, 100)
-            output = node(tree, 'ShaderNodeOutputMaterial', 'MATERIAL_OUTPUT', 1050, 100)
+            bsdf = node(tree, 'ShaderNodeBsdfPrincipled', category+'_SURFACE', 400, 300)
+            bsdf.width = 240
+            output = node(tree, 'ShaderNodeOutputMaterial', 'MATERIAL_OUTPUT', 760, 300)
             tree.links.new(bsdf.outputs[0], output.inputs['Surface'])
-            base = texture(tree, files, color, True, y=400) if color else None
-            nm = texture(tree, files, norm, y=-100) if norm else None
+            base = texture(tree, files, color, True, x=-500, y=400) if color and category != 'HEAD' else None
+            nm = texture(tree, files, norm, x=-500, y=0) if norm and category != 'HEAD' else None
             if base:
                 tree.links.new(base.outputs['Color'], bsdf.inputs['Base Color'])
-            elif color:
+            elif color and category != 'HEAD':
                 warnings.append(f'{color} is missing; using a fallback material')
             if nm:
                 normal(tree, nm.outputs['Color'], bsdf)
             if category == 'HEAD':
-                animated = all(f'head_normal_animated_wm{i}' in files for i in (1,2,3))
-                if animated and nm and ASSET.is_file():
-                    g = node(tree, 'ShaderNodeGroup', 'DNA_WRINKLES', -500, 500)
-                    g.node_tree = load_wrinkles(prefix)
-                    tree.links.new(base.outputs['Color'], g.inputs['cm_base'])
-                    tree.links.new(nm.outputs['Color'], g.inputs['wm_base'])
-                    for i in (1,2,3):
-                        cm = texture(tree,files,f'Head_Basecolor_Animated_CM{i}',True,y=850+i*260)
-                        wm = texture(tree,files,f'Head_Normal_Animated_WM{i}',y=-1400-i*260)
-                        tree.links.new((cm or base).outputs['Color'],g.inputs[f'cm{i}'])
-                        tree.links.new(wm.outputs['Color'],g.inputs[f'wm{i}'])
-                    tree.links.new(g.outputs['Color'],bsdf.inputs['Base Color'])
-                    normal(tree,g.outputs['Normal'],bsdf,x=-100,y=-150)
+                g = head_material(tree,bsdf,files,prefix,float(rig.get(bake.RIG_KEY_SCALE,.01)))
+                if g:
                     count, new_holders = realize_wrinkles(reader,model,variant,rig,board,g,collection,prefix,lod)
                     driver_count += count; holders += new_holders
                 else:
                     warnings.append('Animated normal maps missing; head uses static shading')
-                skin(tree,bsdf,files,float(rig.get(bake.RIG_KEY_SCALE,.01)))
+                frame(tree, 'SURFACE_OUTPUT', [(bsdf,0,0),(output,320,0)], (400,300))
             elif category == 'TEETH':
                 bsdf.inputs['Roughness'].default_value = .28
                 bsdf.inputs['Subsurface Weight'].default_value = .08
@@ -325,11 +503,10 @@ def setup(reader, model, variant, rig, board, meshes, folder, collection, prefix
                 bsdf.inputs['Coat Weight'].default_value = .3
             elif category == 'EYELASHES':
                 bsdf.inputs['Base Color'].default_value = (.015,.008,.005,1)
-                if base:
-                    tree.links.new(base.outputs['Alpha'],bsdf.inputs['Alpha'])
-                else:
-                    # The DCC export contains no eyelash alpha. Opaque cards cover the eyes.
-                    bsdf.inputs['Alpha'].default_value = 0
+                alpha = texture(tree, files, 'EyeLashes_Alpha', x=-200, y=300)
+                # The supplied image is grayscale coverage, not its opaque PNG alpha.
+                tree.links.new(alpha.outputs['Color'],bsdf.inputs['Alpha'])
+                bsdf.inputs['Roughness'].default_value = .4
             else:
                 # Transparent wet overlay preserves the iris and mouth below it.
                 tree.links.remove(output.inputs['Surface'].links[0])

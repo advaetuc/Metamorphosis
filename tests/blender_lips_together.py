@@ -47,7 +47,8 @@ for filename in sys.argv[sys.argv.index("--") + 1:]:
     assert len(lips) == 4
     assert all(any(v.kind == "loc" and v.ref == c.bone for n in plan.nodes for v in n.vars) for c in lips)
 
-    # Reconstruct the old raw-only Lite plan to guard all unrelated expressions.
+    # Reconstruct raw-only Lite to guard unrelated expressions. Mouth combinations
+    # now intentionally differ: they must receive the native compensating PSD.
     old_model = copy.copy(model)
     old_model.matrix = model.matrix.copy()
     old_model.matrix[:, model.raw_count:] = 0
@@ -124,11 +125,16 @@ for filename in sys.argv[sys.argv.index("--") + 1:]:
             else:
                 assert motion < 1e-10, (filename, i, "extreme must extend the regular jaw")
     for pose in samples:
+        pose = pose.copy()
+        for control in model.gui:
+            if 'mouth' in control.bone.lower() or 'jaw' in control.bone.lower():
+                pose[control.index] = 0
         old, new = evaluate(pose, old_plan), evaluate(pose)
         for target in old.keys() | new.keys():
             neutral = 1.0 if target[2] == "scale" else 0.0
             assert abs(old.get(target, neutral) - new.get(target, neutral)) < 1e-10, target
-    # Compare against 1.0.7 with its Lips Together fix when Extreme is at zero.
+    # With Extreme at zero, removing only its columns must leave all other
+    # retained mouth combinations unchanged.
     previous = copy.copy(model)
     previous.matrix = model.matrix.copy()
     previous.matrix[:, sorted(bakeplan.jaw_open_extreme_columns(model, result.variant))] = 0

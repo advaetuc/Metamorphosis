@@ -4,7 +4,7 @@
 
 <p align="center">
   <strong>MetaHuman heads · Native facial drivers · Capture · Animated materials</strong><br>
-  Development version <strong>1.0.10</strong> · Blender <strong>5.0+</strong> · <strong>Lite</strong> rig mode
+  Development version <strong>1.2.2</strong> · Blender <strong>5.0+</strong> · <strong>Lite</strong> rig mode
 </p>
 
 <p align="center">
@@ -17,15 +17,15 @@
 
 ---
 
-MetaMorphosis imports a MetaHuman head DNA file, builds its original deformation rig and face board, and compiles RigLogic into **native Blender drivers**. Imported facial controls and wrinkle animation continue working when the add-on is disabled. Capture requires the add-on while receiving or processing input; baked takes are native Blender actions.
+MetaMorphosis imports a MetaHuman head DNA file, builds its original deformation rig and face board, and compiles RigLogic into **native Blender drivers and Geometry Nodes**. Imported facial controls and wrinkle animation continue working when the add-on is disabled. Capture requires the add-on while receiving or processing input; baked takes are native Blender actions.
 
 ## What’s included
 
 | Feature | Current development stage |
 | :--- | :--- |
 | **DNA import** | Head meshes, original skeleton, face board, organized object and bone collections |
-| **Native facial rig** | Lite-only drivers, shared middle-eye control, Lips Together and Jaw Open Extreme correctives |
-| **Materials & wrinkles** | DCC texture discovery, skin detail, eye/teeth maps, native DNA animated-map drivers |
+| **Native facial rig** | Lite-only drivers, shared middle-eye control, mouth/jaw combination correctives |
+| **Materials & wrinkles** | Compact shader groups, bundled detail/teeth/lash textures, procedural eye edges, native DNA animated-map drivers |
 | **Live Link Face** | Epic ARKit UDP preview, countdown recording and editable animation takes |
 | **Video to Mocap** | Local facial tracking, background processing, cancellation and action baking |
 | **Scene cleanup** | Remove All targets imported content and preserves unrelated/shared data |
@@ -44,6 +44,10 @@ MetaMorphosis imports a MetaHuman head DNA file, builds its original deformation
 
 > **Updating an existing scene:** use **Rebuild Drivers** to receive rig fixes and optimization; the original DNA and compatible bindings must remain available. Use **Apply Materials to Rig** to assign the new material setup. Capture improvements apply to new takes; existing actions remain unchanged.
 
+**1.2.2 performance update:** reload the updated add-on and use **Rebuild Drivers** on existing rigs. Large joint calculations now run in a native Geometry Nodes graph, retaining every coefficient from the combined-mouth fix. Face controls, actions and materials are preserved. The generated rig still works with the add-on disabled; no extra installation is needed.
+
+New 1.2 imports omit eye-shell/cartilage and create separate left/right eye edges. Reimport the DNA to receive these mesh changes in an older scene; applying materials preserves its existing geometry and reports combined legacy eye edges.
+
 ## Materials and wrinkles
 
 Select a DCC export root or its `Maps` folder. `ExportManifest.json`, when present, supplies additional texture-folder locations.
@@ -58,26 +62,29 @@ CHARACTER_EXPORT/
 │   ├── Head_SRMF.png
 │   ├── Head_Basecolor_Animated_CM1.png   # CM1–CM3
 │   ├── Head_Normal_Animated_WM1.png     # WM1–WM3
-│   ├── Eyes_Color.png / Eyes_Normal.png
-│   └── Teeth_Color.png / Teeth_Normal.png
+│   └── Eyes_Color.png / Eyes_Normal.png
 └── Masks/                              # Not required by the bundled atlas shader
 ```
 
 | Layer | Setup |
 | :--- | :--- |
-| **Skin** | Subsurface scattering, SRMF specular/roughness/metallic/fuzz, DirectX normal conversion |
+| **Skin** | Subsurface scattering, SRMF specular/roughness/metallic/fuzz, native DirectX normal setting in Blender 5.2 |
 | **Fine detail** | Supplied tiled micro-normal textures, packed into the scene |
 | **Wrinkles** | Exported animated color/normal maps, bundled mask atlas, DNA-driven weights |
-| **Eyes & teeth** | Exported color and normal maps with dedicated material settings |
-| **Missing overlays** | Transparent eyelash cards when alpha is unavailable; clear saliva/eye overlay fallbacks |
+| **Eyes** | Exported character color and normal maps |
+| **Teeth** | Bundled universal color and normal maps, packed into the scene |
+| **Eyelashes** | Bundled grayscale alpha coverage, packed into the scene |
+| **Eye edges** | Separate anatomical left/right meshes with the supplied procedural fade and surface detail |
 
-Materials and node groups use **UPPERCASE_WITH_UNDERSCORES** names. Applying materials replaces assignments on the selected imported rig. Reapplying retires obsolete generated wrinkle graphs only when other data does not use them.
+Materials, node groups and group sockets use **UPPERCASE_WITH_UNDERSCORES** names. The head shader has frames for base textures, color wrinkles, normal wrinkles and surface output. A compact **DNA_MATERIAL** group hides the 41 driven wrinkle weights; skin detail mixing is grouped inside it. Blender 5.0 uses an internal compatibility group for DirectX normals.
+
+Applying materials replaces assignments on the selected imported rig. Reapplying retires obsolete generated wrinkle graphs only when other data does not use them.
 
 Wrinkles use native simple-expression drivers, including the DNA’s required animated-map combinations. Their graph is independent of the joint drivers and survives **Rebuild Drivers**. Shader evaluation still carries a rendering cost.
 
-> **Keep textures available:** exported character maps remain linked to their folder. Bundled masks and micro normals are packed. Pack external resources in Blender before moving a scene if its texture paths will change.
+> **Keep textures available:** exported character maps remain linked to their folder. Bundled masks, micro normals, teeth textures and eyelash alpha are packed. Pack external resources in Blender before moving a scene if its texture paths will change.
 
-Missing animated normals produce static skin and a report warning. Incompatible animated-map inputs report an error instead of silently producing incorrect wrinkles. This feature does not generate hair grooms or missing eyelash textures. See [material asset provenance](assets/README.md).
+Missing animated normals produce static skin and a report warning. Incompatible animated-map inputs report an error instead of silently producing incorrect wrinkles. This feature does not generate hair grooms. See [material asset provenance](assets/README.md).
 
 ## Facial capture
 
@@ -96,7 +103,7 @@ Missing animated normals produce static skin and a report warning. Incompatible 
 | **Smoothing** | Smooths capture; mouth/jaw smoothing is capped at 15 ms for speech transients |
 | **Extreme Jaw** | Adds the preserved extreme opening near full jaw opening; off by default |
 
-Version 1.0.10 adds jaw-relative lip closure and mappings for towards, bite, tightening, upper lip press and brow-lateral movement. ARKit does not supply independent bite/tighten/towards coefficients; these mappings are approximations. **Actual iPhone lip-sync quality has not yet been device-tested.**
+Version 1.2 gives inward lip roll its full range and removes the automatic bite that previously competed with it. Jaw-relative closure suppresses conflicting funnel and lip-opening signals; bilateral roll/press can also drive a seal. Tightening and towards mappings remain approximations because ARKit does not supply those independent coefficients. **Actual iPhone lip-sync quality has not yet been device-tested.**
 
 This receiver supports the ARKit stream, not MetaHuman Animator streaming. Capture includes expressions and eye gaze, not head/body rotation. Previous actions are retained as separate takes in the Action Editor. Stop recording before loading another file.
 
@@ -125,17 +132,30 @@ Processing runs locally. MediaPipe’s published binaries include usage telemetr
 | **Blender integration** | Material workflows verified in Blender 5.0 and 5.2 |
 | **Logan wrinkles** | 41 mask inputs; 223 additional native drivers; tested against native RigLogic |
 | **Mouth correctives** | 108 poses per DNA on Ada, MH_BASE and Taro |
+| **Combined mouth controls** | 71 native RigLogic comparisons per DNA on Ada, MH_BASE, Taro and Logan; supplied distorted scene rebuilt and checked standalone |
+| **Native matrix evaluation** | Before/after skinned meshes across 32 poses on Logan, Ada, MH_BASE and Taro; every joint coefficient retained; saved action playback verified without the add-on |
+| **Capture lip geometry** | Seal under conflicting opening inputs and inward roll checked on Ada, MH_BASE, Taro and Logan |
 | **Standalone behavior** | Save/reopen and wrinkle playback with the add-on disabled |
 | **Data preservation** | Material reapplication, shared data and scoped cleanup checks |
 | **Capture** | Simulated ARKit UDP, recording policies, cancellation and video baking |
 | **Video sample** | 1,343 tracked frames in the supplied test video |
 | **Installer** | Automatic Python 3.12 selection, dependency repair and persistent setup |
 
-The recorded **1.0.9 Ada benchmark** reduced drivers from **17,119 to 12,961** (24.3%) and median update time from **23.05 to 21.94 ms** in Blender 5.2. These measurements predate Phase 2 materials and are not a benchmark of a combined body/proxy scene. **The 7–15 ms target has not been reached.**
+The **1.2.2 Logan benchmark** reduced the corrected rig from **34,959 to 5,653 drivers** and median update time from **60.78 to 11.67 ms** in Blender 5.2, using the same scene and benchmark. The 413 mouth/jaw correctives and their coefficients are retained. Across 32 test poses, the largest mesh-coordinate difference from the previous rig was **0.00048 mm**. These are local dependency-graph measurements; viewport shading, hardware and other scene contents also affect playback.
+
+| Character / test | Before | After |
+| :--- | ---: | ---: |
+| Logan, saved scene | 60.78 ms | **11.67 ms** |
+| Ada, fresh import | 70.66 ms | **15.74 ms** |
+| MH_BASE, fresh import | 75.24 ms | **16.01 ms** |
+| Taro, fresh import | 70.27 ms | **15.64 ms** |
+| Logan, 104 changing mouth/jaw controls | 59.76 ms | **11.81 ms** |
+
+Large rigs store the joint matrix in hidden helper meshes and a native Geometry Nodes group. Keep their `RIGLOGICDATA` collection with the rig. Rebuild and Remove All manage these helpers automatically. Smaller graphs continue to use expression drivers.
 
 ### Current limits
 
-- Lite retains primary expressions plus the selected **Lips Together** and **Jaw Open Extreme** joint correctives. Other joint PSD combinations remain omitted.
+- Lite retains primary expressions and **mouth/jaw combination correctives**, including **Lips Together** and **Jaw Open Extreme**. Unrelated upper-face joint PSD combinations remain omitted.
 - ML and head/neck RBF correctives remain unbaked, although newer DNA control indices are read correctly.
 - Jaw Open Extreme extends an already-open jaw; it has no effect when the regular jaw is fully closed.
 - Real-phone capture quality remains unverified. Materials do not remove the cost of viewport shading.
@@ -147,9 +167,9 @@ Regression scripts live in [`tests/`](tests/). They run inside Blender; use `wor
 
 ## Development history and credits
 
-**Current stage: Phase 2 — materials, native wrinkles and capture refinement.**
+**Current stage: Update 1.2.2 — faster native evaluation with combined-mouth corrections preserved.**
 
-- [Full development history, 1.0.3–1.0.10](docs/CHANGELOG.md)
+- [Full development history, 1.0.3–1.2.2](docs/CHANGELOG.md)
 - [Material asset provenance](assets/README.md)
 - [Epic MetaHuman texture documentation](https://dev.epicgames.com/documentation/metahuman/materials-and-textures)
 - [PyLiveLinkFace protocol reference](https://github.com/JimWest/PyLiveLinkFace)
