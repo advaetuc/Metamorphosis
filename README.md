@@ -4,7 +4,7 @@
 
 <p align="center">
   <strong>MetaHuman heads · Native facial drivers · Capture · Animated materials</strong><br>
-  Development version <strong>1.2.2</strong> · Blender <strong>5.0+</strong> · <strong>Lite</strong> rig mode
+  Development version <strong>1.6.0</strong> · Blender <strong>5.0+</strong> · <strong>Lite</strong> rig mode
 </p>
 
 <p align="center">
@@ -153,13 +153,40 @@ The **1.2.2 Logan benchmark** reduced the corrected rig from **34,959 to 5,653 d
 
 Large rigs store the joint matrix in hidden helper meshes and a native Geometry Nodes group. Keep their `RIGLOGICDATA` collection with the rig. Rebuild and Remove All manage these helpers automatically. Smaller graphs continue to use expression drivers.
 
+### 4D Sculpt and DNA export
+
+Open **MetaMorphosis → 4D Sculpt** in the sidebar with an imported character selected:
+
+1. Choose **Sculpt Neutral Mesh**. The character temporarily displays its neutral rest pose; face-board values and animation takes are retained.
+2. Sculpt the **HEAD** mesh or use proportional editing in Edit Mode. Keep the original topology. Joints and dependent character meshes follow the displacement field after edits, at most twice per second. **Symmetry Sync** mirrors new displacements while retaining the character's original asymmetry.
+3. Choose **Bake to DNA**. This recalibrates neutral joints, joint translation equations, normals and source DNA blendshape deltas across **all LODs**, including meshes not imported into Blender. It rebuilds the native expression drivers and restores the original pose display. Source corrective targets stay in DNA; normal imports still do not create hundreds of shape keys. Existing legacy keys are updated during the session.
+4. Choose **Export DNA** and a new filename. The exporter preserves DNA version, joint/mesh indices, hierarchy, topology, UVs, skin weights, control mappings and other source layers. It reads the result back before replacing the destination. The original input DNA is protected.
+
+**Lock Topology** restores the last valid neutral sculpt when vertex count or connectivity changes. Turning it off permits exploratory edits, but DNA baking still rejects changed topology. Dyntopo, remeshing, added/deleted vertices and topology-changing modifiers are unsupported. Neutral mode edits proportions; use the expression workflow below for a posed face. Neither mode edits skin weights, bone orientations or UVs. Use modest edits and review expressions after baking. Displacement transfer and local corrective differentials are geometric approximations; they do not reconstruct facial muscles or retrain ML/RBF behavior. Incompatible per-axis joint LOD tables are rejected rather than altered silently.
+
+**Cancel Sculpt** restores the saved meshes and joint positions. Session backups are saved inside the `.blend`; loading a file or undoing pauses tracking, and **Resume Sculpt** restarts it. Keep the original DNA and session objects/backups available until baking or cancelling. Bake preparations are stored in Blender's user data under `MetaMorphosis/SculptDNA`; exporting switches future driver rebuilds to the exported file. Keep that DNA with your project when moving between computers.
+
+There is **no sculpt timer during normal playback** or after baking/cancelling. Existing native driver evaluation, full mouth correctives and standalone animation remain in place. Blender/native RigLogic read-back is tested; actual Unreal Editor reimport is not yet validated.
+
+#### Sculpt an expression
+
+1. Pose the face board, for example by raising the left smile control. Choose **Sculpt Expression** under **MetaMorphosis → 4D Sculpt**.
+2. In **Driven by**, select the active expression that should trigger your detail, such as `CTRL_expressions.mouthCornerPullL`. Each edit follows **one existing DNA expression**, including when it is used in mixed poses. A bilateral smile can be edited one side at a time; this is not a new trigger for an arbitrary combination of controls.
+3. Enter Sculpt Mode on the selected working copy and add the dimple or other detail. Keep the face board at the captured pose and preserve topology. The original head is temporarily hidden; the copy has the posed surface frozen for editing. **Symmetry Sync**, if enabled, mirrors the correction when applying it.
+4. Choose **Apply Expression to DNA**. The add-on fits translation changes to the existing facial joints, then stores the remaining fine surface detail in a DNA corrective shape. This offline step rebuilds the native drivers and checks the reconstructed surface before accepting the result. Neutral vertices and rest joints stay unchanged.
+5. Reset the chosen expression: the correction disappears. Move it again: the correction returns with its activation. Use **Export DNA** to save a portable copy of the edited DNA. Reimporting that file restores the authored expression automatically.
+
+Applying another sculpt to the same expression updates its existing corrective. Only deliberately authored targets are loaded as shape keys; the source DNA's full corrective library is still not imported. Expression playback uses native drivers and skinning with **no Python playback handler**. The saved `.blend` plays without the add-on. More authored detail can add evaluation cost; local Logan tests with one edited smile remained about **11.4 ms** for changing mouth/jaw controls, with **5,653 → 5,660 drivers** in Blender 5.2.
+
+**Cancel Expression Sculpt** discards the working copy. Pending expression work is saved inside the `.blend` and can be applied or cancelled after reopening; keep its objects and source DNA available. Changed topology, changed pose, nonstandard skinning or modified source weights are rejected. Standard Armature skinning is required, with Preserve Volume off. Fine-detail transfer to other head LODs and joint fitting are approximations; review strong poses and combinations after editing. Exported DNA passes native RigLogic and Blender reimport checks; actual Unreal Editor reimport remains untested.
+
 ### Current limits
 
 - Lite retains primary expressions and **mouth/jaw combination correctives**, including **Lips Together** and **Jaw Open Extreme**. Unrelated upper-face joint PSD combinations remain omitted.
 - ML and head/neck RBF correctives remain unbaked, although newer DNA control indices are read correctly.
 - Jaw Open Extreme extends an already-open jaw; it has no effect when the regular jaw is fully closed.
 - Real-phone capture quality remains unverified. Materials do not remove the cost of viewport shading.
-- Body-rig combining and new blendshape import are removed. Existing legacy shape keys are preserved.
+- Body-rig combining and bulk blendshape import are removed. Existing legacy shape keys and explicitly authored expression correctives are supported.
 
 ### Development checks
 
@@ -167,9 +194,9 @@ Regression scripts live in [`tests/`](tests/). They run inside Blender; use `wor
 
 ## Development history and credits
 
-**Current stage: Update 1.2.2 — faster native evaluation with combined-mouth corrections preserved.**
+**Current stage: Update 1.6 — neutral and expression sculpting with binary DNA export and native playback.**
 
-- [Full development history, 1.0.3–1.2.2](docs/CHANGELOG.md)
+- [Full development history, 1.0.3–1.6](docs/CHANGELOG.md)
 - [Material asset provenance](assets/README.md)
 - [Epic MetaHuman texture documentation](https://dev.epicgames.com/documentation/metahuman/materials-and-textures)
 - [PyLiveLinkFace protocol reference](https://github.com/JimWest/PyLiveLinkFace)

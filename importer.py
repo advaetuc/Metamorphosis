@@ -229,6 +229,8 @@ def _create_mesh(
     modifier.object = rig
     obj['mm_head_mesh'] = True
     obj['mm_mesh_kind'] = kind
+    obj['mm_dna_mesh_index'] = int(mesh_index)
+    obj['mm_dna_vertex_indices'] = vertex_indices
 
     return obj
 

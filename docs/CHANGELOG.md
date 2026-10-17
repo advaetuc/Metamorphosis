@@ -4,6 +4,67 @@
 
 Release notes describe each version at the time it was developed. For current setup instructions, use the README.
 
+## 1.6.0 — Expression sculpting
+
+- Keep **Sculpt Neutral Mesh** and add **Sculpt Expression** in the same
+  MetaMorphosis > 4D Sculpt section. Capture a posed head, sculpt its frozen
+  working copy, and select one active DNA expression to drive the correction.
+- Fit the existing facial joints' translation coefficients to the sculpt and
+  store remaining surface detail as a DNA blendshape. Resetting the selected
+  expression removes the edit; neutral geometry and rest joints are unchanged.
+  The correction also follows that expression in mixed poses. Repeated edits
+  merge into its existing authored target.
+- Preserve existing raw/PSD indices, mouth correctives, source targets and
+  ML/RBF layers. Extend head-LOD shape mappings without renumbering old channels.
+  Import/rebuild loads only marked authored shapes, and retains their joint
+  coefficients through Lite compilation. Native playback needs no Python handler.
+- Validate neutral preservation, target indices, LOD mappings and actual posed
+  reconstruction before finishing. Keep the working sculpt after a failed
+  application and restore the previous mesh/DNA/drivers. Pending sessions save
+  in the blend file; changed pose, topology and skinning are rejected.
+- Blender 5.0/5.2 Logan tests cover repeated edits, saved sessions, cancellation,
+  actual bone movement, partial activation, unchanged neutral/unrelated poses,
+  native RigLogic at all LODs, export/reimport and standalone action playback.
+  Blender 5.2 Logan moving-mouth median: **11.47 → 11.40 ms**, **5,653 → 5,660**
+  drivers. MH_BASE: **14.41 → 15.03 ms**, **5,649 → 5,662** drivers. These are
+  local dependency-graph timings, not guaranteed viewport FPS.
+- Joint fitting and lower-LOD detail transfer are geometric approximations;
+  this does not retrain ML/RBF or create arbitrary pose-combination triggers.
+  Actual Unreal Editor reimport remains untested.
+
+## 1.5.1 — Sculpt context and sidebar fix
+
+- Supply explicit target-object context for sculpt mode switches, including
+  joint updates, restoration and recovery when the sidebar context has no
+  active object. Restore the view-layer selection and mode afterward.
+- Move **4D Sculpt** into the existing **MetaMorphosis** panel as a collapsible
+  section. Register the parent panel before its sculpt child.
+- Keep the native rig graph and animation evaluation unchanged. Regression
+  coverage includes missing/stale object context, Object/Pose/Edit/Sculpt modes,
+  start/resume/cancel, panel registration and the existing sculpt/bake workflow.
+
+## 1.5.0 — Neutral sculpt adaptation and DNA export
+
+- Add the **4D Sculpt** sidebar with joint following, symmetry synchronization,
+  topology protection, recoverable sessions, cancellation, **Bake to DNA** and
+  **Export DNA**. Sculpt tracking runs only during an explicit session.
+- Transfer the neutral displacement field to dependent geometry and joint
+  positions. Bake transports source corrective deltas and joint translation
+  equations to the edited proportions and rebuilds the existing native graph.
+  Preserve all LODs, sparse target indices, original topology, UVs, skin weights,
+  control wiring, DNA format and other source layers. No premium sculpt source
+  or external sculpt/export application is required.
+- Export through the bundled DNA writer, validate by reading the output back,
+  and replace the destination atomically. Protect the source DNA from overwrite.
+- Saved sessions resume explicitly after loading or undo. Cancellation restores
+  the pre-session data. DNA preparation uses Blender's user data directory;
+  portable export becomes the source for subsequent driver rebuilds.
+- Corrective transport is a geometric approximation for neutral proportion
+  changes, not an anatomical solver or ML/RBF retraining. Keep topology and
+  review complex expressions after substantial edits. Unreal Editor reimport
+  remains untested; Blender and native RigLogic round-trip tests are provided
+  in `tests/blender_sculpt_export.py`.
+
 ## 1.2.2 — Native matrix evaluation
 
 - Move large joint sums from thousands of individual expression drivers to a

@@ -11,7 +11,7 @@ import bpy
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, FloatVectorProperty, IntProperty, StringProperty
 from bpy_extras.io_utils import ImportHelper
 
-from . import bake, bakeplan, cleanup, dnaio, faceboard, importer, organization, pipeline, verify, materials
+from . import bake, bakeplan, cleanup, dnaio, faceboard, importer, organization, pipeline, verify, materials, expression_dna
 from .constants import ADDON_ID, LABEL
 from .logicmodel import RigLogicModel
 
@@ -168,6 +168,8 @@ class MM_OT_import_dna(bpy.types.Operator, ImportHelper):
 
             # ---- 4. bake
             wm.progress_update(65)
+            imported.rig[bake.RIG_KEY_SCALE] = self.scale
+            authored_shapes = expression_dna.load_shapes(reader, imported.meshes)
             orientation = bakeplan.joint_orientation_inverse(reader, model.joint_count, rotation_degrees)
             plan, stats = pipeline.run_bake(
                 context,
@@ -177,7 +179,7 @@ class MM_OT_import_dna(bpy.types.Operator, ImportHelper):
                 rig=imported.rig,
                 board_object=board_object,
                 board_bone_names=board_bone_names,
-                shape_key_map={},
+                shape_key_map=authored_shapes,
                 meshes=imported.meshes,
                 collection=imported.collection,
                 prefix=prefix,
@@ -269,6 +271,12 @@ class MM_OT_rebuild(bpy.types.Operator):
         if rig is None:
             self.report({"ERROR"}, "No MetaMorphosis rig found")
             return {"CANCELLED"}
+        if 'mm_sculpt_session' in rig and not rig.get('mm_sculpt_rebuilding'):
+            self.report({'ERROR'}, 'Finish Bake to DNA or Cancel Sculpt before rebuilding drivers')
+            return {'CANCELLED'}
+        if 'mm_expression_session' in rig and not rig.get('mm_expression_rebuilding'):
+            self.report({'ERROR'}, 'Apply or cancel the expression sculpt before rebuilding drivers')
+            return {'CANCELLED'}
         dna_path = Path(str(rig.get(bake.RIG_KEY_DNA, "")))
         if not dna_path.is_file():
             self.report({"ERROR"}, f"The DNA file is missing: {dna_path}")
@@ -295,6 +303,7 @@ class MM_OT_rebuild(bpy.types.Operator):
             variant = result.variant or model.variants()[0]
 
             children = bake.head_meshes(rig)
+            expression_dna.load_shapes(reader, children)
             channel_of = {str(reader.getBlendShapeChannelName(i)): i for i in range(reader.getBlendShapeChannelCount())}
             shape_key_map: dict = {}
             for mesh in children:

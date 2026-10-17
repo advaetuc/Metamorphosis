@@ -361,6 +361,7 @@ def build_plan(
     jaw_columns = jaw_open_extreme_columns(model, variant) if not use_psd else set()
     mouth_columns = mouth_combination_columns(model, variant) if not use_psd else set()
     retained_columns = lip_columns | jaw_columns | mouth_columns
+    retained_columns |= model.authored_columns
     if not use_psd:
         matrix = matrix.copy()
         matrix[:, model.raw_count :] = 0.0
@@ -401,6 +402,8 @@ def build_plan(
                 ))
             else:
                 keep = _keep_within_budget(row, budget[a // 3])
+            if model.authored_columns:
+                keep = np.union1d(keep, [c for c in model.authored_columns if row[c] != 0]).astype(int)
             pruned_terms += int(np.count_nonzero(row)) - keep.size
             const = -float(base_combined[a])
             if a >= 6:

@@ -86,6 +86,7 @@ class RigLogicModel:
         self.matrix = np.zeros((0, 0), np.float32)
         self.bs_in = np.zeros(0, np.int64)
         self.bs_out = np.zeros(0, np.int64)
+        self.authored_columns = set()
         self.rbf_joints: set[int] = set()
         self.warnings: list[str] = []
         self._psd_cache: dict = {}
@@ -174,6 +175,8 @@ class RigLogicModel:
 
         m.bs_in = _arr(reader.getBlendShapeChannelInputIndices(), np.int64)
         m.bs_out = _arr(reader.getBlendShapeChannelOutputIndices(), np.int64)
+        from .expression_dna import records
+        m.authored_columns = {int(r['control']) for r in records(reader)}
 
         try:
             for solver in range(int(reader.getRBFSolverCount())):
