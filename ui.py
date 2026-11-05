@@ -1,6 +1,7 @@
 """Sidebar panel (3D Viewport > N panel > MetaMorphosis)."""
 
 import bpy
+from bpy.props import FloatVectorProperty
 
 from . import bake, mocap
 from .constants import LABEL
@@ -21,34 +22,59 @@ class MM_PT_panel(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+
         box = layout.box()
-        box.label(text="Materials and Textures", icon='MATERIAL')
-        box.prop(context.scene, 'mm_texture_folder')
+        box.label(text="Character Setup", icon='IMPORT')
+        box.prop(context.scene, 'mm_texture_folder', text="Texture Source")
         if bake.find_baked_rig(context):
-            box.operator('metamorphosis.setup_materials', icon='MATERIAL')
+            box.operator('metamorphosis.setup_materials', text="Apply Materials", icon='MATERIAL')
         row = layout.row(align=True)
-        row.scale_y = 1.25
-        row.operator("metamorphosis.import_dna", text="Import DNA", icon="IMPORT")
-        row.operator("metamorphosis.remove_all", text="Remove All", icon="TRASH")
+        row.scale_y = 1.35
+        row.operator("metamorphosis.import_dna", text="Import DNA", icon="FILE_FOLDER")
+        row.operator("metamorphosis.remove_all", text="Remove", icon="TRASH")
 
         rig = bake.find_baked_rig(context)
         if rig is None:
-            layout.label(text="Import a DNA file to get started.", icon="INFO")
+            box = layout.box()
+            box.label(text="Ready for your character", icon="INFO")
+            box.label(text="Import a MetaHuman DNA file to begin.")
             return
         box = layout.box()
-        box.label(text=rig.name, icon="ARMATURE_DATA")
-        box.label(text=f"Native drivers · {rig.get('mm_quality', 'LITE').title()}", icon="DRIVER")
+        box.label(text="Active Character", icon="ARMATURE_DATA")
+        box.label(text=rig.name, icon="OUTLINER_OB_ARMATURE")
+        box.label(text=f"{rig.get('mm_quality', 'LITE').title()} rig · Native drivers", icon="DRIVER")
         if rig.get("mm_stats"):
             for part in str(rig["mm_stats"]).split(", "):
-                box.label(text=part)
+                box.label(text=part, icon="DOT")
         layout.separator()
-        layout.label(text="Rig Controls", icon="POSE_HLT")
-        row = layout.row(align=True)
+        box = layout.box()
+        box.label(text="Rig Controls", icon="POSE_HLT")
+        row = box.row(align=True)
         op = row.operator("metamorphosis.toggle_rig", text="Enable", icon="PLAY")
         op.enable = True
         op = row.operator("metamorphosis.toggle_rig", text="Disable", icon="PAUSE")
         op.enable = False
-        layout.operator("metamorphosis.rebuild", icon="FILE_REFRESH")
+        box.operator("metamorphosis.rebuild", text="Rebuild Drivers", icon="FILE_REFRESH")
+
+
+class MM_PT_customization(bpy.types.Panel):
+    bl_label = "Customization"
+    bl_idname = "MM_PT_customization"
+    bl_parent_id = "MM_PT_panel"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = LABEL
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+        layout.label(text="Match the control board to your workspace.", icon="INFO")
+        layout.prop(context.scene, "mm_face_board_color", text="Control Colour")
+        layout.operator("metamorphosis.apply_face_board_color", icon="COLORSET_01_VEC")
 
 
 class MM_PT_diagnostics(bpy.types.Panel):
@@ -65,6 +91,8 @@ class MM_PT_diagnostics(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
         col = layout.column(align=True)
         col.enabled = bake.find_baked_rig(context) is not None
         col.operator("metamorphosis.validate", text="Check Drivers", icon="CHECKMARK")
@@ -97,8 +125,9 @@ class MM_PT_live_link(bpy.types.Panel):
         col.prop(settings, 'host')
         col.prop(settings, 'port')
         col.prop(settings, 'subject')
-        layout.label(text="Live Link Face: ARKit mode", icon='INFO')
-        layout.label(text="Set the phone's target to this PC's IP.")
+        info = layout.box()
+        info.label(text="Epic Live Link Face · ARKit", icon='INFO')
+        info.label(text="Send the phone stream to this computer.")
         layout.operator('metamorphosis.live_stop' if live else 'metamorphosis.live_start',
                         icon='PAUSE' if live else 'PLAY')
         layout.label(text=settings.status)
@@ -151,8 +180,9 @@ class MM_PT_video(bpy.types.Panel):
         if mocap._job:
             layout.operator('metamorphosis.video_cancel', icon='CANCEL')
         layout.label(text=settings.video_status)
-        box = col.box()
-        box.label(text="One-time setup", icon='PREFERENCES')
+        box = layout.box()
+        box.label(text="Video Tools", icon='PREFERENCES')
+        box.label(text="One-time local setup", icon='INFO')
         if mocap.video_ready(mocap.video_folder(settings)):
             box.label(text='Video tools installed',icon='CHECKMARK')
         else:
@@ -165,4 +195,48 @@ class MM_PT_video(bpy.types.Panel):
         layout.label(text="Videos are processed on this computer.")
 
 
-CLASSES = (MM_PT_panel, MM_PT_live_link, MM_PT_video, MM_PT_diagnostics)
+class MM_OT_apply_face_board_color(bpy.types.Operator):
+    bl_idname = "metamorphosis.apply_face_board_color"
+    bl_label = "Apply Face Board Colour"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        from . import bake
+        rig = bake.find_baked_rig(context)
+        if rig is None:
+            self.report({'ERROR'}, 'Select an imported MetaHuman rig first')
+            return {'CANCELLED'}
+        board = bpy.data.objects.get(str(rig.get(bake.RIG_KEY_BOARD_OBJECT, '')))
+        if board is None or board.type != 'ARMATURE':
+            self.report({'ERROR'}, 'The face board armature is missing')
+            return {'CANCELLED'}
+        rgb = tuple(context.scene.mm_face_board_color)
+        normal = rgb
+        select = tuple(c+(1-c)*.4 for c in rgb)
+        active = tuple(c+(1-c)*.7 for c in rgb)
+        changed = 0
+        for bone in board.pose.bones:
+            if not bone.name.startswith('CTRL_') or bone.color is None:
+                continue
+            bone.color.palette = 'CUSTOM'
+            bone.color.custom.normal = normal
+            bone.color.custom.select = select
+            bone.color.custom.active = active
+            changed += 1
+        self.report({'INFO'}, f'Updated {changed} face-board controls')
+        return {'FINISHED'}
+
+
+CLASSES = (MM_PT_panel, MM_PT_customization, MM_OT_apply_face_board_color, MM_PT_live_link, MM_PT_video, MM_PT_diagnostics)
+
+
+def register():
+    bpy.types.Scene.mm_face_board_color = FloatVectorProperty(
+        name='Face Board Colour', subtype='COLOR', size=3,
+        min=0.0, max=1.0, default=(0.956, 0.788, 0.047),
+        description='Color used for all face-board control bones',
+    )
+
+
+def unregister():
+    del bpy.types.Scene.mm_face_board_color

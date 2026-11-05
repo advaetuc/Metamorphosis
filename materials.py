@@ -499,8 +499,14 @@ def setup(reader, model, variant, rig, board, meshes, folder, collection, prefix
                 bsdf.inputs['Subsurface Weight'].default_value = .08
                 bsdf.inputs['Subsurface Scale'].default_value = .001
             elif color == 'Eyes_Color':
-                bsdf.inputs['Roughness'].default_value = .22
-                bsdf.inputs['Coat Weight'].default_value = .3
+                # Layer a broad corneal reflection over the detailed iris/sclera.
+                # Principled BSDF remains supported in both Eevee and Cycles.
+                bsdf.inputs['Roughness'].default_value = .28
+                bsdf.inputs['IOR'].default_value = 1.38
+                bsdf.inputs['Coat Weight'].default_value = .22
+                bsdf.inputs['Coat Roughness'].default_value = .08
+                bsdf.inputs['Coat IOR'].default_value = 1.376
+                bsdf.inputs['Specular IOR Level'].default_value = .5
             elif category == 'EYELASHES':
                 bsdf.inputs['Base Color'].default_value = (.015,.008,.005,1)
                 alpha = texture(tree, files, 'EyeLashes_Alpha', x=-200, y=300)

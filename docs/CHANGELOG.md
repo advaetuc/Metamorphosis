@@ -4,6 +4,28 @@
 
 Release notes describe each version at the time it was developed. For current setup instructions, use the README.
 
+## 1.8.1 — Import overlay and interface polish
+
+- Add a centered viewport overlay during DNA import, with animated color ribbons,
+  current stage, percentage and progress bar. It follows existing import and bake
+  milestones and removes itself on success or failure.
+- Refine the MetaMorphosis sidebar into clearer setup, active-character and rig
+  control sections; simplify customization, capture and video tool labels.
+
+## 1.8.0 — Face-board and eye customization
+
+- Add a collapsible Customization section inside MetaMorphosis with a face-board
+  control color picker and an explicit apply button.
+- Improve eye highlights using Principled BSDF corneal coat settings supported
+  by Eevee and Cycles.
+- MetaHuman Animator streaming was explicitly deferred at the user's request.
+- Body DNA was inspected: John Rambo body DNA has 342 joints, 176 raw controls,
+  215 RBF pose controls and 72 RBF solvers. The current Lite compiler does not
+  evaluate body RBF solvers. The supplied MH2Rigify script is a manual skeleton
+  preparation utility, not a Rigify generator; PolyHammer body helpers require
+  its private rig-instance framework. A standalone body control rig and RBF
+  playback are therefore not included in this version.
+
 ## 1.6.0 — Expression sculpting
 
 - Keep **Sculpt Neutral Mesh** and add **Sculpt Expression** in the same

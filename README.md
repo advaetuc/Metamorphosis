@@ -4,7 +4,7 @@
 
 <p align="center">
   <strong>MetaHuman heads · Native facial drivers · Capture · Animated materials</strong><br>
-  Development version <strong>1.6.0</strong> · Blender <strong>5.0+</strong> · <strong>Lite</strong> rig mode
+  Development version <strong>1.8.1</strong> · Blender <strong>5.0+</strong> · <strong>Lite</strong> rig mode
 </p>
 
 <p align="center">
@@ -29,6 +29,8 @@ MetaMorphosis imports a MetaHuman head DNA file, builds its original deformation
 | **Live Link Face** | Epic ARKit UDP preview, countdown recording and editable animation takes |
 | **Video to Mocap** | Local facial tracking, background processing, cancellation and action baking |
 | **Scene cleanup** | Remove All targets imported content and preserves unrelated/shared data |
+| **Customization** | Apply a user-selected color to face-board controls |
+| **Import experience** | Centered animated DNA progress overlay with clear stages and percentage |
 
 <p align="center">
   <img src="docs/images/native-workflow.svg" alt="DNA builds a native rig, DCC textures supply materials, and live or video capture produces editable actions. Native rig and wrinkle playback work without the add-on." width="100%">
@@ -79,6 +81,8 @@ CHARACTER_EXPORT/
 Materials, node groups and group sockets use **UPPERCASE_WITH_UNDERSCORES** names. The head shader has frames for base textures, color wrinkles, normal wrinkles and surface output. A compact **DNA_MATERIAL** group hides the 41 driven wrinkle weights; skin detail mixing is grouped inside it. Blender 5.0 uses an internal compatibility group for DirectX normals.
 
 Applying materials replaces assignments on the selected imported rig. Reapplying retires obsolete generated wrinkle graphs only when other data does not use them.
+
+The **Customization** section under the MetaMorphosis panel includes a **Face Board Colour** color picker. Choose a color and apply it to recolor the board's control bones. Eye materials use a layered Principled surface with a separate corneal coat; the node setup is compatible with Eevee and Cycles.
 
 Wrinkles use native simple-expression drivers, including the DNA’s required animated-map combinations. Their graph is independent of the joint drivers and survives **Rebuild Drivers**. Shader evaluation still carries a rendering cost.
 
@@ -194,9 +198,9 @@ Regression scripts live in [`tests/`](tests/). They run inside Blender; use `wor
 
 ## Development history and credits
 
-**Current stage: Update 1.6 — neutral and expression sculpting with binary DNA export and native playback.**
+**Current stage: Update 1.8 — neutral/expression sculpting, native playback, and rig/material customization.**
 
-- [Full development history, 1.0.3–1.6](docs/CHANGELOG.md)
+- [Full development history, 1.0.3–1.8](docs/CHANGELOG.md)
 - [Material asset provenance](assets/README.md)
 - [Epic MetaHuman texture documentation](https://dev.epicgames.com/documentation/metahuman/materials-and-textures)
 - [PyLiveLinkFace protocol reference](https://github.com/JimWest/PyLiveLinkFace)

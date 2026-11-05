@@ -11,7 +11,7 @@ import bpy
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, FloatVectorProperty, IntProperty, StringProperty
 from bpy_extras.io_utils import ImportHelper
 
-from . import bake, bakeplan, cleanup, dnaio, faceboard, importer, organization, pipeline, verify, materials, expression_dna
+from . import bake, bakeplan, cleanup, dnaio, faceboard, importer, organization, pipeline, verify, materials, expression_dna, progress_ui
 from .constants import ADDON_ID, LABEL
 from .logicmodel import RigLogicModel
 
@@ -109,14 +109,17 @@ class MM_OT_import_dna(bpy.types.Operator, ImportHelper):
         import_snapshot = None
         import_token = cleanup.new_token()
         wm.progress_begin(0, 100)
+        progress_ui.begin("Reading DNA file")
         started = time.perf_counter()
         try:
             wm.progress_update(2)
+            progress_ui.update(2, "Reading DNA file", force=True)
             reader = dnaio.open_reader(dna_path, bindings_folder)
             rotation_degrees, _units = dnaio.unit_flags(reader)
 
             # ---- 1. read RigLogic and verify the numeric model
             wm.progress_update(8)
+            progress_ui.update(8, "Verifying RigLogic", force=True)
             model = RigLogicModel.from_reader(reader)
             _dna, riglogic, _folder = dnaio.load_bindings(bindings_folder)
             result = verify.verify_model(model, riglogic, reader, release=dnaio.release_handle)
@@ -141,17 +144,25 @@ class MM_OT_import_dna(bpy.types.Operator, ImportHelper):
             # ---- 2. meshes + rig
             import_snapshot = cleanup.snapshot()
             wm.progress_update(15)
+            progress_ui.update(15, "Importing head geometry", force=True)
             prefix = importer.unique_prefix(self.character_name.strip() or dna_path.stem)
             options = importer.ImportOptions(
                 scale=self.scale, lod=self.lod, prefix=prefix,
                 rotation_degrees=rotation_degrees,
             )
-            imported = importer.import_head(reader, options)
+            imported = importer.import_head(
+                reader, options,
+                progress=lambda fraction: (
+                    wm.progress_update(int(15 + 38 * fraction)),
+                    progress_ui.update(int(15 + 38 * fraction), "Importing head geometry"),
+                ),
+            )
             report_lines += [f"Imported {len(imported.meshes)} meshes + rig '{imported.rig.name}'"]
             report_lines += [f"Warning: {w}" for w in imported.warnings]
 
             # ---- 3. face board
             wm.progress_update(55)
+            progress_ui.update(55, "Building face board", force=True)
             board = faceboard.append_face_board(
                 context, board_path, imported.collection, tuple(self.face_board_location)
             )
@@ -168,6 +179,7 @@ class MM_OT_import_dna(bpy.types.Operator, ImportHelper):
 
             # ---- 4. bake
             wm.progress_update(65)
+            progress_ui.update(65, "Baking native facial controls", force=True)
             imported.rig[bake.RIG_KEY_SCALE] = self.scale
             authored_shapes = expression_dna.load_shapes(reader, imported.meshes)
             orientation = bakeplan.joint_orientation_inverse(reader, model.joint_count, rotation_degrees)
@@ -188,13 +200,18 @@ class MM_OT_import_dna(bpy.types.Operator, ImportHelper):
                 rotation_degrees=rotation_degrees,
                 dna_path=str(dna_path),
                 report=report_lines,
-                progress=lambda fraction: wm.progress_update(int(75 + 24 * fraction)),
+                progress=lambda fraction: (
+                    wm.progress_update(int(75 + 24 * fraction)),
+                    progress_ui.update(int(75 + 24 * fraction), "Baking native facial controls"),
+                ),
             )
             report_lines += _stats_lines(plan, stats)
             imported.rig['mm_lod'] = self.lod
             if texture_folder:
+                progress_ui.update(99, "Finishing materials", force=True)
                 report_lines += materials.setup(reader, model, variant, imported.rig, board_object,
                     imported.meshes, texture_folder, imported.collection, prefix, self.lod)
+            progress_ui.update(100, "Import complete", force=True)
         except Exception as error:  # noqa: BLE001
             logger.exception("MetaMorphosis import failed")
             report_lines += ["", f"FAILED: {type(error).__name__}: {error}", "", traceback.format_exc()]
@@ -208,6 +225,7 @@ class MM_OT_import_dna(bpy.types.Operator, ImportHelper):
             if reader is not None:
                 dnaio.release_handle(reader)
             wm.progress_end()
+            progress_ui.end()
 
         report_lines.append(f"Total time: {time.perf_counter() - started:.1f}s")
         bake.write_report(report_lines)

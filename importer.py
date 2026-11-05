@@ -236,7 +236,7 @@ def _create_mesh(
 
 
 
-def import_head(reader, options: ImportOptions) -> ImportResult:
+def import_head(reader, options: ImportOptions, progress=None) -> ImportResult:
     """Create the collection, rig and meshes for the head DNA in ``reader``."""
     scene = bpy.context.scene
     collection = bpy.data.collections.new(options.prefix)
@@ -254,7 +254,7 @@ def import_head(reader, options: ImportOptions) -> ImportResult:
     lod_meshes = list(reader.getMeshIndicesForLOD(options.lod))
     if not lod_meshes:
         raise RuntimeError(f"The DNA file has no meshes for LOD{options.lod}")
-    for mesh_index in lod_meshes:
+    for mesh_number, mesh_index in enumerate(lod_meshes):
         mesh_name = str(reader.getMeshName(mesh_index))
         kind = re.sub(r'[^a-z]', '', _kind_of(mesh_name).lower())
         if kind in {'eyeshell', 'cartilage', 'eyecartilage'}:
@@ -266,4 +266,6 @@ def import_head(reader, options: ImportOptions) -> ImportResult:
         except Exception as error:  # noqa: BLE001 - keep importing the other meshes
             logger.exception("Mesh '%s' failed", mesh_name)
             result.warnings.append(f"Mesh '{mesh_name}' failed to import: {error}")
+        if progress is not None:
+            progress((mesh_number + 1) / len(lod_meshes))
     return result

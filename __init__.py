@@ -17,11 +17,13 @@ def register():
     mocap.register()
     materials.register()
     sculpt.register()
+    ui.register()
     bpy.types.TOPBAR_MT_file_import.append(operators.menu_import)
 
 
 def unregister():
     sculpt.unregister()
+    ui.unregister()
     materials.unregister()
     mocap.unregister()
     bpy.types.TOPBAR_MT_file_import.remove(operators.menu_import)
