@@ -219,7 +219,8 @@ def convert(rig,collection,shape_preset='UNREAL'):
     from . import body_refine
     mapping=body_refine.prepare(template,source,mapping)
     generated=set(template.data.bones.keys())
-    body_refine.apply_shape_preset(template,widgets,shape_preset)
+    template.matrix_world=rig.matrix_world.copy()
+    body_refine.apply_shape_preset(template,widgets,shape_preset,mesh=mesh)
     body_refine.clean_widgets(template,shapes,widgets)
     # Finish all fallible template fitting before changing a prototype.
     if remove:

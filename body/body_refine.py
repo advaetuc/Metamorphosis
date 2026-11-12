@@ -229,7 +229,73 @@ def clean_widgets(rig, candidates, collection):
     collection.hide_viewport=True;collection.hide_render=True
 
 
-def apply_shape_preset(rig, widgets_collection, preset='UNREAL'):
+def fit_shapes_to_mesh(rig, mesh, margin=1.18):
+    """Dynamically expand control shapes so they wrap cleanly around the body mesh with zero clipping."""
+    if not mesh or mesh.type != 'MESH' or not mesh.data or not len(mesh.data.vertices):
+        return
+    from mathutils import Matrix, Vector
+    m_inv = mesh.matrix_world.inverted()
+    m_rot = m_inv.to_3x3()
+    target_names = {
+        'TORSO', 'HIPS', 'CHEST',
+        'SPINE_01_FK', 'SPINE_02_FK', 'SPINE_03_FK', 'SPINE_04_FK',
+        'NECK_01_FK', 'NECK_02_FK', 'HEAD',
+        'ARM_FK.L', 'ARM_FK.R', 'FOREARM_FK.L', 'FOREARM_FK.R',
+        'THIGH_FK.L', 'THIGH_FK.R', 'SHIN_FK.L', 'SHIN_FK.R',
+        'FOOT_FK.L', 'FOOT_FK.R', 'FOOT_IK.L', 'FOOT_IK.R', 'HAND_FK.L', 'HAND_FK.R'
+    }
+    ratios = {}
+    for name in target_names:
+        pb = rig.pose.bones.get(name)
+        if not pb or not pb.custom_shape:
+            continue
+        wgt = pb.custom_shape
+        bone = rig.data.bones.get(name)
+        if not bone:
+            continue
+        scale_vec = Vector(pb.custom_shape_scale_xyz)
+        if pb.use_custom_shape_bone_size:
+            scale_vec *= bone.length
+        T = Matrix.Translation(pb.custom_shape_translation)
+        R = pb.custom_shape_rotation_euler.to_matrix().to_4x4()
+        S = Matrix.Diagonal((scale_vec[0], scale_vec[1], scale_vec[2], 1.0))
+        wgt_local_mat = T @ R @ S
+        bone_mat = rig.matrix_world @ (pb.custom_shape_transform.matrix if pb.custom_shape_transform else pb.matrix)
+        wgt_world_mat = bone_mat @ wgt_local_mat
+        center = bone_mat.translation
+        center_local = m_inv @ center
+        verts = wgt.data.vertices
+        step = max(1, len(verts) // 24)
+        sample_verts = [verts[i] for i in range(0, len(verts), step)]
+        bone_ratios = []
+        for v in sample_verts:
+            wp = wgt_world_mat @ v.co
+            disp = wp - center
+            dist_w = disp.length
+            if dist_w < 1e-4:
+                continue
+            dir_mesh = m_rot @ disp
+            hit, loc, norm, fidx = mesh.ray_cast(center_local, dir_mesh)
+            if hit:
+                dist_m = (mesh.matrix_world @ loc - center).length
+                if dist_m < 0.8:
+                    bone_ratios.append((dist_m * margin) / dist_w)
+        if bone_ratios:
+            ratios[name] = max(bone_ratios)
+
+    for name in list(ratios):
+        if name.endswith('.L'):
+            other = name[:-2] + '.R'
+            s_ratio = max(ratios.get(name, 1.0), ratios.get(other, 1.0))
+            ratios[name] = ratios[other] = s_ratio
+
+    for name, req_ratio in ratios.items():
+        if req_ratio > 1.0:
+            pb = rig.pose.bones[name]
+            pb.custom_shape_scale_xyz = [s * req_ratio for s in pb.custom_shape_scale_xyz]
+
+
+def apply_shape_preset(rig, widgets_collection, preset='UNREAL', mesh=None):
     """Import only the requested preset widgets ('UNREAL' or 'BLENDER') and assign them."""
     from pathlib import Path
     preset = str(preset or 'UNREAL').upper()
@@ -269,6 +335,8 @@ def apply_shape_preset(rig, widgets_collection, preset='UNREAL'):
         pb.custom_shape_transform = rig.pose.bones.get(entry['transform']) if entry['transform'] else None
         if hasattr(pb, 'custom_shape_wire_width'):
             pb.custom_shape_wire_width = float(entry.get('wire_width', 1.0))
+    if mesh is not None:
+        fit_shapes_to_mesh(rig, mesh)
     return set(loaded.values())
 
 
