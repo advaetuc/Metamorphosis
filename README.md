@@ -4,7 +4,7 @@
 
 <p align="center">
   <strong>MetaHuman heads · Native facial drivers · Capture · Animated materials</strong><br>
-  Development version <strong>1.8.1</strong> · Blender <strong>5.0+</strong> · <strong>Lite</strong> rig mode
+  Version <strong>2.10</strong> · Blender <strong>5.0+</strong> · <strong>Lite</strong> rig mode
 </p>
 
 <p align="center">
@@ -27,7 +27,9 @@ MetaMorphosis imports a MetaHuman head DNA file, builds its original deformation
 | **Native facial rig** | Lite-only drivers, shared middle-eye control, mouth/jaw combination correctives |
 | **Materials & wrinkles** | Compact shader groups, bundled detail/teeth/lash textures, procedural eye edges, native DNA animated-map drivers |
 | **Live Link Face** | Epic ARKit UDP preview, countdown recording and editable animation takes |
+| **MetaHuman Animator (development)** | Direct iPhone stream, DNA-based face-board mapping and native action baking; tested with Live Link Face 1.7.3 (185) |
 | **Video to Mocap** | Local facial tracking, background processing, cancellation and action baking |
+| **Custom body rig (2.10)** | Two-step native DNA import + Build Control Rig, selectable Unreal/Blender custom shapes, intact limb twist/pole falloff, Bake Rig UI for `Item`-tab panels. [Workflow and limits](docs/BODY_RIG.md) |
 | **Scene cleanup** | Remove All targets imported content and preserves unrelated/shared data |
 | **Customization** | Apply a user-selected color to face-board controls |
 | **Import experience** | Centered animated DNA progress overlay with clear stages and percentage |
@@ -36,7 +38,11 @@ MetaMorphosis imports a MetaHuman head DNA file, builds its original deformation
   <img src="docs/images/native-workflow.svg" alt="DNA builds a native rig, DCC textures supply materials, and live or video capture produces editable actions. Native rig and wrinkle playback work without the add-on." width="100%">
 </p>
 
+**Update 2.10:** includes body control rig two-step import/build workflow, selectable Unreal or Blender custom shapes, `SPINE_05_FK` cleanup & face-aligned head/neck controls, full upper-arm/thigh Y-twist and IK pole deformation, and **Bake Rig UI** standalone **Item**-tab panels.
+
 ## Quick start
+
+**This folder is installable:** zip `Metamorphosis` and use **Install from Disk**. Keep the manifest, entry point, assets and bindings together. See [folder layout and installation](INSTALL.md). Generated development artifacts live outside the package.
 
 1. **Install the extension** through Blender’s **Preferences → Get Extensions → Install from Disk**, then restart Blender. For an existing development installation, update its source files and reload the add-on.
 2. **Check import resources.** The add-on uses `assets/face_board.blend` and compatible OpenRigLogic bindings in `bindings/`. Preferences provide overrides; **Test Bindings** checks availability. Binding discovery matches Blender’s Python version.

@@ -1,0 +1,589 @@
+"""Live Link and video capture UI, main-thread animation, and native action baking."""
+import json
+import math
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import time
+
+import bpy
+from bpy.app.handlers import persistent
+from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, PointerProperty, StringProperty
+
+from ..riglogic import bake
+from .mocap_core import Receiver, Recording, Sample, resample
+from .mocap_mapping import face_board_pose
+from .video_worker import environment_python, TOOLS_VERSION
+
+_live = None
+_job = None
+
+
+def has_capture_controls(obj):
+    """Recognize the actual board after armature joins lose head metadata."""
+    return (obj is not None and obj.type == 'ARMATURE'
+            and all(name in obj.pose.bones for name, _ in face_board_pose({})))
+
+
+def capture_target_poll(_settings, obj):
+    return obj.type == 'ARMATURE' and (bake.RIG_KEY_DATA in obj or has_capture_controls(obj))
+
+
+class MM_CaptureSettings(bpy.types.PropertyGroup):
+    mode: EnumProperty(name='Capture Mode', items=(('ARKIT', 'ARKit', 'ARKit facial coefficients'),
+        ('MHA', 'MetaHuman Animator', 'Direct iPhone MetaHuman Animator stream')), default='ARKIT')
+    phone_ip: StringProperty(name='iPhone Address', default='')
+    phone_port: IntProperty(name='Phone Control Port', default=14785, min=1, max=65535)
+    mha_dna: StringProperty(name='MHA Head DNA', subtype='FILE_PATH',
+        description='Optional original head DNA when the merged rig no longer has its source metadata')
+    target: PointerProperty(name="Face Board / Rig", type=bpy.types.Object,
+                            poll=capture_target_poll)
+    host: StringProperty(name="Listen Address", default="0.0.0.0")
+    port: IntProperty(name="Port", default=11111, min=1024, max=65535)
+    subject: StringProperty(name="Subject", description="Optional actor filter; blank locks onto the first actor")
+    mirror: BoolProperty(name="Mirror Left / Right", default=False)
+    gain: FloatProperty(name="Expression Strength", default=1, min=0, max=3)
+    lips_gain: FloatProperty(name="Lip Strength", default=1.35, min=.1, max=3,
+                            description="Retarget lip closure, rounding, biting and pressing range")
+    brow_gain: FloatProperty(name="Brow Strength", default=1.4, min=.1, max=3)
+    smoothing: FloatProperty(name="Smoothing", default=.04, min=0, max=.5, subtype='TIME',
+                             description="Smoothing time in seconds; zero disables smoothing")
+    extreme: FloatProperty(name="Extreme Jaw", default=0, min=0, max=1,
+                           description="Add Jaw Open Extreme near the top of the captured jaw range")
+    end_mode: EnumProperty(name="At Timeline End", items=(
+        ('EXTEND', 'Extend Timeline', 'Extend the timeline while recording'),
+        ('STOP', 'Stop Keyframing', 'Finish the take at the end frame; live preview continues')), default='EXTEND')
+    take_name: StringProperty(name="Take Name", default="Face Capture")
+    status: StringProperty(default="Disconnected", options={'SKIP_SAVE'})
+    last_take: StringProperty(name="Last Take", default="")
+    video: StringProperty(name="Video", subtype='FILE_PATH')
+    video_python: StringProperty(name="Python Executable", subtype='FILE_PATH',
+                                 description="Optional compatible Python executable; blank automatically finds 64-bit Python 3.9–3.12")
+    video_folder: StringProperty(name="Video Tools Folder", subtype='DIR_PATH',
+                                 description="Optional existing video-tools installation")
+    video_status: StringProperty(default="Choose a video to process", options={'SKIP_SAVE'})
+    video_advanced: BoolProperty(name='Advanced Setup', default=False)
+
+
+def target_board(scene):
+    rig = scene.mm_capture.target or bake.find_baked_rig(bpy.context)
+    if rig is not None and rig.name not in scene.objects:
+        raise ValueError("Select a face board or rig in this scene")
+    if rig is None:
+        active = bpy.context.view_layer.objects.active
+        if active is not None and active.name in scene.objects and has_capture_controls(active):
+            rig = active
+        else:
+            candidates = [obj for obj in scene.objects if has_capture_controls(obj)]
+            if len(candidates) != 1:
+                raise ValueError("Select a face board in Face Board / Rig; automatic selection is ambiguous or unavailable")
+            rig = candidates[0]
+    board = rig if has_capture_controls(rig) else scene.objects.get(str(rig.get(bake.RIG_KEY_BOARD_OBJECT, "")))
+    if board is None or board.type != 'ARMATURE':
+        raise ValueError("The rig's face board is missing; select its face board directly")
+    missing = {n for n, _ in face_board_pose({}) if n not in board.pose.bones}
+    if missing:
+        raise ValueError("Face board is missing capture controls: " + ", ".join(sorted(missing)[:3]))
+    scene.mm_capture.target = rig
+    return board
+
+
+def capture_options(settings):
+    return dict(gain=settings.gain, mirror=settings.mirror, extreme=settings.extreme,
+                lips_gain=settings.lips_gain, brow_gain=settings.brow_gain)
+
+
+def smooth_samples(samples, seconds):
+    previous = None
+    for sample in samples:
+        values = sample.values
+        if previous and seconds > 0:
+            values = dict(values)
+            for n, value in values.items():
+                # Speech transients need a faster response than general face smoothing.
+                duration = min(seconds,.015) if n.startswith(('mouth','jaw','CTRL_expressions_mouth','CTRL_expressions_jaw')) else seconds
+                alpha = 1-math.exp(-max(0, sample.time-previous.time)/duration)
+                values[n] = previous.values.get(n,0)*(1-alpha)+value*alpha
+        previous = Sample(sample.time, values, sample.subject)
+        yield previous
+
+
+def bake_take(board, samples, fps, frame_start, name, options, smoothing=0, start_time=None, mapper=None):
+    """Create a separate action; preserve the previous action and all its channels."""
+    smoothed = list(smooth_samples(samples, smoothing))
+    from .mocap_core import ARKIT_NAMES
+    names = tuple(smoothed[0].values) if mapper and smoothed else ARKIT_NAMES
+    rows = [(frame_start+i, (mapper or face_board_pose)(v, **options))
+            for i, v in resample(smoothed, fps, start_time, names)]
+    if not rows:
+        raise ValueError("No captured frames to bake")
+    action = bpy.data.actions.new(name or "Face Capture")
+    try:
+        slot = action.slots.new(id_type='OBJECT', name=board.name)
+        layer = action.layers.new("Facial Capture")
+        strip = layer.strips.new(type='KEYFRAME')
+        bag = strip.channelbag(slot, ensure=True)
+        for bone, axis in rows[0][1]:
+            path = board.pose.bones[bone].path_from_id("location")
+            curve = bag.fcurves.new(data_path=path, index=axis)
+            curve.keyframe_points.add(len(rows))
+            curve.keyframe_points.foreach_set("co", [x for frame, pose in rows for x in (frame, pose[(bone, axis)])])
+            for point in curve.keyframe_points:
+                point.interpolation = 'LINEAR'
+            curve.update()
+        board.animation_data_create()
+        previous = board.animation_data.action
+        if previous:
+            previous.use_fake_user = True
+        action.use_fake_user = True
+        board.animation_data.action = action
+        board.animation_data.action_slot = slot
+    except Exception:
+        bpy.data.actions.remove(action)
+        raise
+    return action, rows[-1][0]
+
+
+def _redraw():
+    for window in bpy.context.window_manager.windows:
+        for area in window.screen.areas:
+            if area.type in {'VIEW_3D', 'DOPESHEET_EDITOR'}:
+                area.tag_redraw()
+
+
+def finish_recording():
+    if not _live or not _live['recording']:
+        return
+    recording = _live['recording']
+    scene, board = _live['scene'], _live['board']
+    if not recording.samples:
+        _live['recording'] = None
+        scene.mm_capture.status = "No frames received during recording"
+        return
+    action, last = bake_take(board, recording.samples, recording.fps, recording.frame_start,
+                            _live['take_name'], _live['options'], _live['smoothing'], recording.start_time,
+                            _live.get('mapper'))
+    _live['recording'] = None
+    scene.mm_capture.last_take = action.name
+    scene.frame_set(min(last, recording.frame_end) if not recording.extend else last)
+    if recording.extend:
+        scene.frame_end = max(scene.frame_end, last)
+    scene.mm_capture.status = f"Saved take: {action.name}"
+
+
+def _tick_live():
+    global _live
+    if not _live:
+        return None
+    state = _live
+    try:
+        scene, board = state['scene'], state['board']
+        if bpy.context.scene != scene or board.name not in scene.objects:
+            disconnect()
+            return None
+        now = time.monotonic()
+        packets = state['receiver'].drain()
+        recording = state['recording']
+        for packet in packets:
+            if recording:
+                recording.add(packet)
+        if recording:
+            if now < recording.start_time:
+                scene.mm_capture.status = f"Recording in {math.ceil(recording.start_time-now)}…"
+            elif recording.finished(now):
+                finish_recording()
+            else:
+                frame = recording.frame(now)
+                if recording.extend:
+                    scene.frame_end = max(scene.frame_end, frame)
+                scene.frame_set(frame)
+                scene.mm_capture.status = f"Recording · frame {frame}"
+                if not packets and (state['preview'] is None or now-state['preview'].time > 1):
+                    scene.mm_capture.status += " · waiting for signal"
+        if packets:
+            packet = packets[-1]
+            previous = state['preview']
+            smoothed = list(smooth_samples(([previous] if previous else [])+[packet], scene.mm_capture.smoothing))[-1]
+            state['preview'] = smoothed
+            options = state['options'] if recording else capture_options(scene.mm_capture)
+            for (bone, axis), value in (state.get('mapper') or face_board_pose)(smoothed.values, **options).items():
+                board.pose.bones[bone].location[axis] = value
+            if not recording:
+                scene.mm_capture.status = f"Live · {packet.subject}"
+        elif not recording and (state['preview'] is None or now-state['preview'].time > 1):
+            scene.mm_capture.status = "Listening · waiting for " + state.get('mode', 'ARKIT') + " data"
+        receiver = state['receiver']
+        if receiver.error:
+            raise RuntimeError(receiver.error)
+        if receiver.dropped:
+            scene.mm_capture.status += f" · {receiver.dropped} packets dropped"
+        if receiver.bad_packets and not packets and state['preview'] is None:
+            scene.mm_capture.status = "Unrecognized data · check the selected capture mode"
+        _redraw()
+        return 1/60
+    except Exception as error:
+        try:
+            state['scene'].mm_capture.status = f"Capture stopped: {error}"
+        except ReferenceError:
+            pass
+        disconnect(bake_recording=False)
+        return None
+
+
+def disconnect(bake_recording=True):
+    global _live
+    if _live:
+        try:
+            if bake_recording:
+                finish_recording()
+        finally:
+            _live['receiver'].close()
+            if _live.get('mapper'):
+                _live['mapper'].close()
+            _live = None
+    if bpy.app.timers.is_registered(_tick_live):
+        bpy.app.timers.unregister(_tick_live)
+
+
+class MM_OT_live_start(bpy.types.Operator):
+    bl_idname = 'metamorphosis.live_start'
+    bl_label = 'Connect Live Link'
+    def execute(self, context):
+        global _live
+        if _live or _job:
+            self.report({'ERROR'}, "Finish the current capture or video job first")
+            return {'CANCELLED'}
+        try:
+            scene = context.scene
+            board = target_board(scene)
+            settings = scene.mm_capture
+            mapper = None
+            if settings.mode == 'MHA':
+                from .mha_live import MHAReceiver
+                from .mha_mapping import Mapper
+                mapper = Mapper(scene, board, settings.mha_dna)
+                try:
+                    receiver = MHAReceiver(settings.host, settings.port, settings.phone_ip,
+                                           settings.phone_port, settings.subject)
+                except Exception:
+                    mapper.close()
+                    raise
+            else:
+                receiver = Receiver(settings.host, settings.port, subject=settings.subject)
+            _live = dict(scene=scene, board=board, receiver=receiver, recording=None, preview=None,
+                         mapper=mapper, mode=settings.mode)
+            bpy.app.timers.register(_tick_live, first_interval=0)
+            settings.status = "Connecting · " + settings.mode
+        except Exception as error:
+            disconnect(False)
+            self.report({'ERROR'}, str(error))
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
+
+class MM_OT_live_stop(bpy.types.Operator):
+    bl_idname = 'metamorphosis.live_stop'
+    bl_label = 'Disconnect'
+    def execute(self, context):
+        disconnect()
+        context.scene.mm_capture.status = "Disconnected"
+        return {'FINISHED'}
+
+
+class MM_OT_record_start(bpy.types.Operator):
+    bl_idname = 'metamorphosis.record_start'
+    bl_label = 'Start Recording'
+    def execute(self, context):
+        if not _live or _live['recording'] or _live['scene'] != context.scene:
+            return {'CANCELLED'}
+        scene = context.scene
+        if context.screen and context.screen.is_animation_playing:
+            bpy.ops.screen.animation_cancel(restore_frame=False)
+        settings = scene.mm_capture
+        if settings.end_mode == 'STOP' and scene.frame_current > scene.frame_end:
+            self.report({'ERROR'}, "Move the playhead inside the timeline before recording")
+            return {'CANCELLED'}
+        _live['options'] = capture_options(settings)
+        _live['smoothing'] = settings.smoothing
+        _live['take_name'] = settings.take_name
+        _live['recording'] = Recording(time.monotonic(), scene.frame_current, scene.frame_end,
+                                       scene.render.fps / scene.render.fps_base, settings.end_mode == 'EXTEND')
+        settings.status = "Recording in 3…"
+        return {'FINISHED'}
+
+
+class MM_OT_record_stop(bpy.types.Operator):
+    bl_idname = 'metamorphosis.record_stop'
+    bl_label = 'Stop Recording'
+    bl_options = {'REGISTER', 'UNDO'}
+    def execute(self, context):
+        if _live and _live['recording']:
+            for sample in _live['receiver'].drain():
+                _live['recording'].add(sample)
+        try:
+            finish_recording()
+        except Exception as error:
+            self.report({'ERROR'}, str(error))
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
+
+def shared_video_root():
+    base = Path(os.environ.get('LOCALAPPDATA', Path.home()/'.local'/'share'))
+    return base/'MetaMorphosis'/'VideoTools'
+
+
+def video_files_present(folder):
+    return environment_python(folder/'python').is_file() and (folder/'face_landmarker.task').is_file()
+
+
+def video_ready(folder):
+    try:
+        return video_files_present(folder) and json.loads((folder/'ready.json').read_text())['version']==TOOLS_VERSION
+    except (OSError,ValueError,KeyError):
+        return False
+
+
+def video_folder(settings):
+    if settings.video_folder:
+        return Path(bpy.path.abspath(settings.video_folder))
+    shared = shared_video_root()
+    config = shared/'installation.json'
+    if config.is_file():
+        try:
+            saved = Path(json.loads(config.read_text(encoding='utf-8'))['folder'])
+            if video_files_present(saved):
+                return saved
+        except (ValueError,KeyError,OSError):
+            pass
+    if video_files_present(shared):
+        return shared
+    # Reuse a previous in-app installation, including after a Blender upgrade.
+    legacy = Path(bpy.utils.user_resource('DATAFILES',path='metamorphosis_video'))
+    if video_files_present(legacy):
+        return legacy
+    config_root = Path(bpy.utils.user_resource('CONFIG')).parent.parent
+    for candidate in sorted(config_root.glob('*/datafiles/metamorphosis_video'),reverse=True):
+        if video_files_present(candidate):
+            return candidate
+    return shared
+
+
+def remember_video_folder(folder):
+    root = shared_video_root()
+    root.mkdir(parents=True,exist_ok=True)
+    temporary = root/'installation.tmp'
+    temporary.write_text(json.dumps({'folder':str(folder.resolve())}),encoding='utf-8')
+    temporary.replace(root/'installation.json')
+
+
+def setup_python(settings):
+    if settings.video_python:
+        candidates = [Path(bpy.path.abspath(settings.video_python))]
+    else:
+        candidates = [Path(sys.prefix)/('bin/python.exe' if os.name == 'nt' else 'bin/python3')]
+        if os.name == 'nt':
+            import winreg
+            for version in ('3.12','3.11','3.10','3.9'):
+                for hive in (winreg.HKEY_CURRENT_USER,winreg.HKEY_LOCAL_MACHINE):
+                    try:
+                        with winreg.OpenKey(hive,fr'Software\Python\PythonCore\{version}\InstallPath') as key:
+                            candidates.append(Path(winreg.QueryValue(key,None))/'python.exe')
+                    except OSError:
+                        pass
+    for candidate in candidates:
+        if not candidate.is_file():
+            continue
+        try:
+            result = subprocess.run([str(candidate),'-c',
+                'import sys,struct;sys.exit(not ((3,9)<=sys.version_info[:2]<=(3,12) and struct.calcsize("P")==8))'],
+                capture_output=True,timeout=5,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
+            if result.returncode == 0:
+                return candidate
+        except (OSError,subprocess.TimeoutExpired):
+            pass
+    raise ValueError('Video setup needs 64-bit Python 3.9–3.12. Install Python 3.12, then click Install Video Tools again.')
+
+
+def _launch_job(scene, command, folder, **extra):
+    global _job
+    folder.mkdir(parents=True, exist_ok=True)
+    log_path = folder/'process.log'
+    log = log_path.open('w', encoding='utf-8')
+    try:
+        process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT,
+                                   creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+    except Exception:
+        log.close()
+        raise
+    _job = dict(scene=scene, process=process, log=log, log_path=log_path, **extra)
+    bpy.app.timers.register(_tick_video, first_interval=.2)
+
+
+def _tick_video():
+    global _job
+    if not _job:
+        return None
+    job = _job
+    try:
+        settings = job['scene'].mm_capture
+        if job['process'].poll() is None:
+            progress = job.get('progress')
+            if progress and progress.exists():
+                settings.video_status = progress.read_text(encoding='utf-8')
+            _redraw()
+            return .25
+        job['log'].close()
+        if job['process'].returncode:
+            lines = job['log_path'].read_text(encoding='utf-8', errors='replace').splitlines()
+            raise ValueError(next((s[7:] for s in reversed(lines) if s.startswith('ERROR: ')),
+                                  f"Processing failed; see {job['log_path']}"))
+        if job.get('output'):
+            with job['output'].open(encoding='utf-8') as stream:
+                next(stream)  # worker metadata
+                samples = [Sample(row['time'], row['values']) for row in map(json.loads, stream)]
+            board = job['board']
+            scene = job['scene']
+            if board.name not in scene.objects:
+                raise ValueError("Target rig was removed; animation was not applied")
+            action, last = bake_take(board, samples, job['fps'], job['frame_start'], job['name'],
+                                    job['options'], job['smoothing'])
+            scene.frame_end = max(scene.frame_end, last)
+            scene.frame_set(job['frame_start'])
+            settings.video_status = f"Baked {action.name} · through frame {last}"
+            settings.last_take = action.name
+            remember_video_folder(job['tools_folder'])
+        else:
+            settings.video_status = "Video tools ready"
+            remember_video_folder(job['tools_folder'])
+    except Exception as error:
+        try:
+            job['scene'].mm_capture.video_status = str(error)
+        except ReferenceError:
+            pass
+    _job = None
+    _redraw()
+    return None
+
+
+class MM_OT_video_setup(bpy.types.Operator):
+    bl_idname = 'metamorphosis.video_setup'
+    bl_label = 'Install Video Tools'
+    bl_description = 'Download local video-tracking tools and model; videos stay on this computer'
+    repair: BoolProperty(default=False,options={'HIDDEN'})
+    def execute(self, context):
+        if _job or _live:
+            return {'CANCELLED'}
+        settings = context.scene.mm_capture
+        folder = video_folder(settings)
+        if video_ready(folder) and not self.repair:
+            try:
+                _launch_job(context.scene,[str(environment_python(folder/'python')),
+                    str(Path(__file__).with_name('video_worker.py')),'--check',str(folder/'face_landmarker.task')],
+                    folder,tools_folder=folder)
+                settings.video_status = 'Checking existing video tools…'
+                return {'FINISHED'}
+            except Exception as error:
+                self.report({'ERROR'},str(error)); return {'CANCELLED'}
+        if not bpy.app.online_access:
+            self.report({'ERROR'}, "Enable Blender's Allow Online Access to download the video tools")
+            return {'CANCELLED'}
+        try:
+            python = setup_python(settings)
+            _launch_job(context.scene, [str(python), str(Path(__file__).with_name('video_worker.py')),
+                                       '--setup', str(folder)], folder, tools_folder=folder)
+            settings.video_status = "Installing video tools and model…"
+        except Exception as error:
+            self.report({'ERROR'}, str(error))
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
+
+class MM_OT_video_process(bpy.types.Operator):
+    bl_idname = 'metamorphosis.video_process'
+    bl_label = 'Process Video and Bake'
+    def execute(self, context):
+        if _job or _live:
+            self.report({'ERROR'}, "Disconnect Live Link or finish the current video job first")
+            return {'CANCELLED'}
+        scene = context.scene
+        settings = scene.mm_capture
+        folder = video_folder(settings)
+        python = environment_python(folder/'python')
+        model = folder/'face_landmarker.task'
+        try:
+            board = target_board(scene)
+            video = Path(bpy.path.abspath(settings.video))
+            if not video.is_file():
+                raise ValueError("Choose an existing video file")
+            if not video_ready(folder):
+                raise ValueError("Install Video Tools first")
+            work = Path(tempfile.mkdtemp(prefix='mm_video_'))
+            output, progress = work/'capture.jsonl', work/'progress.txt'
+            _launch_job(scene, [str(python), str(Path(__file__).with_name('video_worker.py')),
+                               '--video', str(video), '--model', str(model), '--output', str(output),
+                               '--progress', str(progress)], work, output=output, progress=progress, tools_folder=folder,
+                        board=board, frame_start=scene.frame_current, fps=scene.render.fps/scene.render.fps_base,
+                        name=settings.take_name, options=capture_options(settings), smoothing=settings.smoothing)
+            settings.video_status = "Processing video locally…"
+        except Exception as error:
+            self.report({'ERROR'}, str(error))
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
+
+def cancel_video():
+    global _job
+    if _job:
+        job = _job
+        _job = None
+        if job['process'].poll() is None:
+            if os.name == 'nt':
+                # Include setup's pip child process; never leave a download running after Cancel.
+                subprocess.run(['taskkill', '/PID', str(job['process'].pid), '/T', '/F'],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               creationflags=subprocess.CREATE_NO_WINDOW, timeout=5, check=False)
+            else:
+                job['process'].terminate()
+            try:
+                job['process'].wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                job['process'].kill()
+        job['log'].close()
+    if bpy.app.timers.is_registered(_tick_video):
+        bpy.app.timers.unregister(_tick_video)
+
+
+class MM_OT_video_cancel(bpy.types.Operator):
+    bl_idname = 'metamorphosis.video_cancel'
+    bl_label = 'Cancel Video Processing'
+    def execute(self, context):
+        cancel_video()
+        context.scene.mm_capture.video_status = "Cancelled; no animation applied"
+        return {'FINISHED'}
+
+
+@persistent
+def _before_load(_):
+    disconnect(bake_recording=False)
+    cancel_video()
+
+
+def register():
+    bpy.types.Scene.mm_capture = PointerProperty(type=MM_CaptureSettings)
+    bpy.app.handlers.load_pre.append(_before_load)
+
+
+def unregister():
+    disconnect()
+    cancel_video()
+    if _before_load in bpy.app.handlers.load_pre:
+        bpy.app.handlers.load_pre.remove(_before_load)
+    del bpy.types.Scene.mm_capture
+
+
+CLASSES = (MM_CaptureSettings, MM_OT_live_start, MM_OT_live_stop, MM_OT_record_start,
+           MM_OT_record_stop, MM_OT_video_setup, MM_OT_video_process, MM_OT_video_cancel)

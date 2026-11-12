@@ -4,6 +4,7 @@ Run after blender_materials.py, which creates work/materials_logan.blend.
 """
 import importlib.util
 from pathlib import Path
+WORK = __import__("runpy").run_path(str(Path(__file__).with_name("_paths.py")))["WORK"]
 import sys
 import bpy
 from mathutils import Vector
@@ -13,7 +14,7 @@ spec = importlib.util.spec_from_file_location('metamorphosis', ROOT/'__init__.py
 addon = importlib.util.module_from_spec(spec); sys.modules[spec.name] = addon; spec.loader.exec_module(addon)
 from metamorphosis import bake, cleanup, dnaio, materials, ui
 
-bpy.ops.wm.open_mainfile(filepath=str(ROOT/'work/materials_logan.blend'))
+bpy.ops.wm.open_mainfile(filepath=str(WORK/'materials_logan.blend'))
 rig = bake.find_baked_rig(bpy.context)
 meshes = {o['mm_mesh_kind'].lower(): o for o in bake.head_meshes(rig)}
 assert not any('shell' in k or 'cartilage' in k for k in meshes), meshes.keys()

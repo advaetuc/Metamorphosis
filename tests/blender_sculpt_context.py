@@ -2,6 +2,7 @@
 import importlib.util
 from contextlib import nullcontext
 from pathlib import Path
+WORK = __import__("runpy").run_path(str(Path(__file__).with_name("_paths.py")))["WORK"]
 import sys
 
 import bpy
@@ -13,7 +14,7 @@ spec = importlib.util.spec_from_file_location('metamorphosis', ROOT/'__init__.py
 addon = importlib.util.module_from_spec(spec); sys.modules[spec.name] = addon; spec.loader.exec_module(addon)
 from metamorphosis import bake, sculpt
 
-bpy.ops.wm.open_mainfile(filepath=str(ROOT/'work/native_sums_mouth_corrected.blend'))
+bpy.ops.wm.open_mainfile(filepath=str(WORK/'native_sums_mouth_corrected.blend'))
 addon.register()
 assert bpy.types.MM_PT_sculpt.bl_parent_id == 'MM_PT_panel'
 assert bpy.types.MM_PT_sculpt.bl_category == bpy.types.MM_PT_panel.bl_category == 'MetaMorphosis'

@@ -4,6 +4,7 @@ Arguments: -- scene.blend [render]. Writes only work/ test artifacts.
 """
 import importlib.util
 from pathlib import Path
+WORK = __import__("runpy").run_path(str(Path(__file__).with_name("_paths.py")))["WORK"]
 import sys
 import numpy as np
 import bpy
@@ -47,7 +48,7 @@ def unique_drivers():
             assert len(targets)==len(set(targets)),obj.name
 def render(name):
     scene=bpy.context.scene
-    scene.render.filepath=str(ROOT/'work'/name)
+    scene.render.filepath=str(WORK/name)
     bpy.ops.render.render(write_still=True)
 if 'render' in args:
     head=next(o for o in bake.head_meshes(rig) if o.get('mm_mesh_kind')=='head')
@@ -87,7 +88,7 @@ assert materials=={o.name:tuple(o.data.materials) for o in bake.head_meshes(rig)
 info=bake.validate_rig(rig);assert not info['invalid'] and not info['needs_python'],info
 if 'render' in args:render('mouth_after.png')
 new_count=info['drivers']
-file=ROOT/'work/mouth_corrected.blend'
+file=WORK/'mouth_corrected.blend'
 bpy.ops.wm.save_as_mainfile(filepath=str(file))
 dnaio.release_handle(reader)
 addon.unregister();bpy.ops.wm.open_mainfile(filepath=str(file))

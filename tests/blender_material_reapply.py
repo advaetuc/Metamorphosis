@@ -1,10 +1,11 @@
 import bpy,importlib.util,sys,time,statistics
 from pathlib import Path
+WORK = __import__("runpy").run_path(str(Path(__file__).with_name("_paths.py")))["WORK"]
 ROOT=Path.cwd();sys.path.insert(0,str(ROOT/'bindings/windows/x64'/f'py{sys.version_info.major}{sys.version_info.minor}'))
 spec=importlib.util.spec_from_file_location('metamorphosis',ROOT/'__init__.py',submodule_search_locations=[str(ROOT)])
 addon=importlib.util.module_from_spec(spec);sys.modules[spec.name]=addon;spec.loader.exec_module(addon)
 from metamorphosis import bake,materials
-bpy.ops.wm.open_mainfile(filepath=str(ROOT/'work/materials_logan.blend'));addon.register()
+bpy.ops.wm.open_mainfile(filepath=str(WORK/'materials_logan.blend'));addon.register()
 rig=bake.find_baked_rig(bpy.context)
 bpy.context.scene.mm_texture_folder=r'F:\Project_Files\Metahumans\MH_Logan'
 assert bpy.ops.metamorphosis.setup_materials()=={'FINISHED'}

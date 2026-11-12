@@ -5,6 +5,7 @@ Run inside Blender with -- [optional baseline .blend]. Writes only to work/.
 import importlib.util
 import json
 from pathlib import Path
+WORK = __import__("runpy").run_path(str(Path(__file__).with_name("_paths.py")))["WORK"]
 import statistics
 import sys
 import time
@@ -18,8 +19,8 @@ addon = importlib.util.module_from_spec(spec); sys.modules[spec.name] = addon; s
 from metamorphosis import bake, dnaio, dna_export, expression_dna, expression_sculpt as ex, sculpt
 
 args = sys.argv[sys.argv.index('--')+1:] if '--' in sys.argv else []
-scene = Path(args[0]) if args else ROOT/'work/native_sums_mouth_corrected.blend'
-prefix = ROOT/'work'/('expression_'+scene.stem+'_'+str(time.time_ns()))
+scene = Path(args[0]) if args else WORK/'native_sums_mouth_corrected.blend'
+prefix = WORK/('expression_'+scene.stem+'_'+str(time.time_ns()))
 bpy.ops.wm.open_mainfile(filepath=str(scene)); addon.register()
 rig = bake.find_baked_rig(bpy.context); head = sculpt.head_mesh(rig)
 board = bpy.data.objects[rig[bake.RIG_KEY_BOARD_OBJECT]]

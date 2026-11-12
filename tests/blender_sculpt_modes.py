@@ -1,6 +1,7 @@
 """Exercise actual Edit/Sculpt mode transitions, local edits and export UI API."""
 import importlib.util
 from pathlib import Path
+WORK = __import__("runpy").run_path(str(Path(__file__).with_name("_paths.py")))["WORK"]
 import statistics
 import sys
 import time
@@ -14,7 +15,7 @@ addon = importlib.util.module_from_spec(spec); sys.modules[spec.name] = addon; s
 from metamorphosis import bake, dnaio, dna_export, sculpt
 
 addon.register()
-bpy.ops.wm.open_mainfile(filepath=str(ROOT/'work/native_sums_mouth_corrected.blend'))
+bpy.ops.wm.open_mainfile(filepath=str(WORK/'native_sums_mouth_corrected.blend'))
 rig = bake.find_baked_rig(bpy.context)
 before = statistics.median(bake.benchmark(bpy.context, rig, 40)['ms'] for _ in range(3))
 assert bpy.ops.metamorphosis.sculpt_start() == {'FINISHED'}
@@ -34,13 +35,13 @@ bpy.ops.object.mode_set(mode='OBJECT'); bpy.ops.object.mode_set(mode='SCULPT')
 sculpt._active.update(force=True)
 assert bpy.context.object == head and head.mode == 'SCULPT'
 assert not sculpt._active.field.is_affine
-sculpt.prepare(rig, ROOT/'work/sculpt_local_prepared.dna')
+sculpt.prepare(rig, WORK/'sculpt_local_prepared.dna')
 assert not bpy.app.timers.is_registered(sculpt._tick)
 if head.mode != 'OBJECT': bpy.ops.object.mode_set(mode='OBJECT')
 after = statistics.median(bake.benchmark(bpy.context, rig, 40)['ms'] for _ in range(3))
 assert after < before*1.5+2, (before, after)
-assert bpy.ops.metamorphosis.export_dna(filepath=str(ROOT/'work/sculpt_local_export.dna')) == {'FINISHED'}
-check = dnaio.open_reader(ROOT/'work/sculpt_local_export.dna')
+assert bpy.ops.metamorphosis.export_dna(filepath=str(WORK/'sculpt_local_export.dna')) == {'FINISHED'}
+check = dnaio.open_reader(WORK/'sculpt_local_export.dna')
 assert np.allclose(dna_export.positions(check, 0), sculpt.to_dna(sculpt.coords(head.data), rig[bake.RIG_KEY_SCALE]), atol=2e-5)
 dnaio.release_handle(check)
 original = rig['mm_sculpt_original_dna']; original_hash = sculpt.fingerprint(original)
@@ -53,7 +54,7 @@ assert sculpt.fingerprint(original) == original_hash
 prepared_vertices = sculpt.coords(head.data)
 sculpt.set_coords(head.data, sculpt.coords(head.data)+(.001, 0, 0))
 try:
-    bpy.ops.metamorphosis.export_dna(filepath=str(ROOT/'work/sculpt_unbaked.dna'))
+    bpy.ops.metamorphosis.export_dna(filepath=str(WORK/'sculpt_unbaked.dna'))
     raise AssertionError('Unbaked edits silently discarded')
 except RuntimeError as error:
     assert 'Unbaked head edits' in str(error)

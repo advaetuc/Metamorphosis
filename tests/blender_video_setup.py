@@ -1,14 +1,15 @@
 import importlib.util,sys,time
 from pathlib import Path
+WORK = __import__("runpy").run_path(str(Path(__file__).with_name("_paths.py")))["WORK"]
 import bpy
 ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('metamorphosis',ROOT/'__init__.py',submodule_search_locations=[str(ROOT)])
 addon=importlib.util.module_from_spec(spec);sys.modules[spec.name]=addon;spec.loader.exec_module(addon)
 from metamorphosis import mocap
 args = sys.argv[sys.argv.index('--')+1:] if '--' in sys.argv else []
-tools = Path(args[0]).resolve() if args else ROOT/'work'/'video_tools'
+tools = Path(args[0]).resolve() if args else WORK/'video_tools'
 addon.register()
-root=ROOT/'work'/'setup_shared_test'
+root=WORK/'setup_shared_test'
 mocap.shared_video_root=lambda:root
 s=bpy.context.scene.mm_capture
 assert s.video_folder==s.video_python==''

@@ -1,6 +1,7 @@
 """Run in Blender: real DCC import, native wrinkle parity, standalone save and cleanup."""
 import importlib.util,json,sys
 from pathlib import Path
+WORK = __import__("runpy").run_path(str(Path(__file__).with_name("_paths.py")))["WORK"]
 import numpy as np
 import bpy
 ROOT=Path(__file__).resolve().parents[1]
@@ -45,7 +46,7 @@ for obj in bpy.data.objects:
 assert all(i.packed_file or Path(bpy.path.abspath(i.filepath)).is_file() for i in bpy.data.images if i.get(cleanup.OWNER))
 # Failure leaves existing material assignment untouched.
 original=head.active_material
-try:materials.setup(reader,model,res.variant,rig,board,[head],str(ROOT/'work'),rig.users_collection[0],'INVALID')
+try:materials.setup(reader,model,res.variant,rig,board,[head],str(WORK),rig.users_collection[0],'INVALID')
 except ValueError:pass
 else:raise AssertionError('Invalid folder accepted')
 assert head.active_material==original
@@ -57,9 +58,9 @@ def brow_socket(group):
  return next(s for s,n in materials.wrinkle_sockets(group) if n=='head_wm1_normal.head_wm1_browsRaiseInner_L')
 value=brow_socket(group).default_value
 assert value>0
-bpy.ops.wm.save_as_mainfile(filepath=str(ROOT/'work'/'materials_logan.blend'))
+bpy.ops.wm.save_as_mainfile(filepath=str(WORK/'materials_logan.blend'))
 dnaio.release_handle(instance);dnaio.release_handle(manager);dnaio.release_handle(reader)
-addon.unregister();bpy.ops.wm.open_mainfile(filepath=str(ROOT/'work'/'materials_logan.blend'))
+addon.unregister();bpy.ops.wm.open_mainfile(filepath=str(WORK/'materials_logan.blend'))
 rig=bake.find_baked_rig(bpy.context);board=bpy.data.objects[rig[bake.RIG_KEY_BOARD_OBJECT]]
 head=next(m for m in bake.head_meshes(rig) if m.get('mm_mesh_kind')=='head');group=materials.wrinkle_node(head.active_material)
 assert abs(brow_socket(group).default_value-value)<1e-5

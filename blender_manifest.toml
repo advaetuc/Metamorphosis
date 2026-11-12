@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "metamorphosis"
-version = "1.8.1"
+version = "2.10.0"
 name = "MetaMorphosis"
 tagline = "MetaHuman head DNA import with RigLogic baked into drivers"
 maintainer = "MetaMorphosis <noreply@example.com>"
@@ -12,10 +12,12 @@ blender_version_min = "5.0.0"
 license = ["SPDX:GPL-3.0-or-later"]
 copyright = ["2026 MetaMorphosis authors", "2026 Epic Games, Inc. (OpenRigLogic bindings, MIT License)"]
 
+platforms = ["windows-x64"]
+
 tags = ["Rigging", "Animation", "Import-Export"]
 
 [permissions]
-files = "Read and export DNA; store sculpt preparations, capture tools and animation"
+files = "Read/write DNA, sculpt preparations and capture tools"
 network = "Receive Live Link Face and download optional video tools"
 
 [build]
@@ -25,4 +27,11 @@ paths_exclude_pattern = [
   "work/",
   "tests/",
   "AGENTS.md",
+  ".git/",
+  ".github/",
+  ".gitignore",
+  ".gitattributes",
+  "METAMORPHOSIS_AI_CONTEXT.md",
+  "*.blend1",
+  "*.zip",
 ]

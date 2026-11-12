@@ -5,6 +5,7 @@ tests/blender_sculpt_export.py -- [DNA paths ...]. Uses work/ only.
 """
 import importlib.util
 from pathlib import Path
+WORK = __import__("runpy").run_path(str(Path(__file__).with_name("_paths.py")))["WORK"]
 import statistics
 import sys
 import time
@@ -20,7 +21,7 @@ from metamorphosis import bake, cleanup, dnaio, dna_export, sculpt, verify
 from metamorphosis.logicmodel import RigLogicModel
 from metamorphosis.sculpt_field import SurfaceField, symmetry_pairs, sync_symmetry
 
-OUT = ROOT/'work'; OUT.mkdir(exist_ok=True)
+OUT = WORK; OUT.mkdir(exist_ok=True)
 inputs = sys.argv[sys.argv.index('--')+1:] if '--' in sys.argv else [r'F:\BlendLAB\Metahumans\MH_BASE.dna']
 
 

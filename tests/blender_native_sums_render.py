@@ -5,6 +5,7 @@ handler only reads results; the add-on is never registered during rendering.
 """
 import importlib.util
 from pathlib import Path
+WORK = __import__("runpy").run_path(str(Path(__file__).with_name("_paths.py")))["WORK"]
 import sys
 
 import bpy
@@ -43,7 +44,7 @@ scene.render.engine = 'BLENDER_WORKBENCH'
 scene.render.resolution_x = scene.render.resolution_y = 32
 scene.render.resolution_percentage = 100
 scene.frame_start, scene.frame_end = 1, 2
-scene.render.filepath = str(ROOT/'work'/'native_sum_render'/'frame_')
+scene.render.filepath = str(WORK/'native_sum_render'/'frame_')
 seen, failures = set(), []
 def check(scene, graph):
     if graph.mode != 'RENDER': return

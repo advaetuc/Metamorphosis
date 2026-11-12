@@ -7,6 +7,7 @@ fresh imports. Test outputs are written only under work/.
 import copy
 import importlib.util
 from pathlib import Path
+WORK = __import__("runpy").run_path(str(Path(__file__).with_name("_paths.py")))["WORK"]
 import statistics
 import sys
 
@@ -148,7 +149,7 @@ for filename in sys.argv[sys.argv.index('--') + 1:]:
     assert bpy.ops.metamorphosis.rebuild() == {'FINISHED'}
     assert counts == tuple(sum(bool(d.get(native_sums.TAG)) for d in getattr(bpy.data, pool))
                            for pool in ('objects', 'meshes', 'node_groups'))
-    saved = ROOT/'work'/f'native_sums_{source.stem}.blend'
+    saved = WORK/f'native_sums_{source.stem}.blend'
     apply(original)
     bpy.ops.wm.save_as_mainfile(filepath=str(saved))
     addon.unregister(); bpy.ops.wm.open_mainfile(filepath=str(saved))

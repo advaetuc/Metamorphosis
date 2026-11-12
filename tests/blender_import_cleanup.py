@@ -1,6 +1,7 @@
 """Integration test: pass a head DNA path after --; optional final argument 'separate'."""
 import importlib.util
 from pathlib import Path
+WORK = __import__("runpy").run_path(str(Path(__file__).with_name("_paths.py")))["WORK"]
 import sys
 
 sys.dont_write_bytecode=True
@@ -79,12 +80,15 @@ class Layout:
             return Layout()
         return call
 from types import SimpleNamespace
-for panel in ui.CLASSES:
+from metamorphosis import body_rig
+for panel in (*ui.CLASSES,*body_rig.CLASSES):
+    if not issubclass(panel,bpy.types.Panel):continue
     fake=SimpleNamespace(layout=Layout())
-    panel.draw_header(fake,bpy.context);panel.draw(fake,bpy.context)
+    if hasattr(panel,"draw_header"):panel.draw_header(fake,bpy.context)
+    panel.draw(fake,bpy.context)
 
 # Save/reopen ensures ownership survives between sessions. The scene is a test file only.
-output=ROOT/'work'/('cleanup_separate.blend' if 'separate' in args else 'cleanup_joined.blend')
+output=WORK/('cleanup_separate.blend' if 'separate' in args else 'cleanup_joined.blend')
 output.parent.mkdir(exist_ok=True)
 bpy.ops.wm.save_as_mainfile(filepath=str(output))
 addon.unregister()

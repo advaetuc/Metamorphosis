@@ -1,0 +1,273 @@
+"""Import the head meshes and the original facial deformation rig from a MetaHuman head DNA.
+
+This module creates geometry, skinning and the skeleton; materials.py handles optional
+textures and wrinkle drivers. Eye shells/cartilage are omitted; eye edges are split by
+side for their procedural materials. UVs, normals and skin weights retain DNA ordering.
+"""
+
+from __future__ import annotations
+
+import logging
+import math
+import re
+
+from dataclasses import dataclass, field
+
+import bpy
+import numpy as np
+
+from mathutils import Matrix, Vector
+
+from ..core.constants import ATTRS_PER_JOINT, NUMBER_OF_LODS  # noqa: F401
+from ..riglogic.bakeplan import euler_xyz_matrix
+from ..core import organization
+
+logger = logging.getLogger(__name__)
+
+# DNA is Maya Y-up (x=left, y=up, z=front). Blender is Z-up: rotate +90 degrees around X.
+Y_UP_TO_Z_UP = Matrix.Rotation(math.radians(90.0), 4, "X")
+_MESH_KIND = re.compile(r"^(?P<kind>.+?)_lod\d+_mesh$", re.IGNORECASE)
+
+
+@dataclass
+class ImportOptions:
+    scale: float = 0.01
+    lod: int = 0
+    prefix: str = "MetaHuman"
+    rotation_degrees: bool = True
+
+
+@dataclass
+class ImportResult:
+    rig: bpy.types.Object
+    meshes: list = field(default_factory=list)
+    collection: bpy.types.Collection | None = None
+    warnings: list = field(default_factory=list)
+    prefix: str = ""
+
+
+def unique_prefix(prefix: str) -> str:
+    """Return ``prefix`` or ``prefix_001``... so that nothing already in the file is overwritten."""
+    prefix = prefix.upper()
+    if prefix in {"HEAD", "ARMATURE", "RIGLOGICDATA"}:
+        prefix = f"METAHUMAN_{prefix}"
+    candidate, n = prefix, 0
+    while (
+        f"{candidate}_RIG" in bpy.data.objects
+        or candidate in bpy.data.collections
+        or f"{candidate}_RIG" in bpy.data.armatures
+    ):
+        n += 1
+        candidate = f"{prefix}_{n:03d}"
+    return candidate
+
+
+def _kind_of(mesh_name: str) -> str:
+    match = _MESH_KIND.match(mesh_name)
+    return match.group("kind") if match else mesh_name
+
+
+def _to_blender(x, y, z, scale: float) -> np.ndarray:
+    """Rotate DNA (Y-up) vectors to Blender (Z-up) and scale them: (x, y, z) -> (x, -z, y)."""
+    return np.stack([x, -z, y], axis=1) * scale
+
+
+def _create_rig(reader, options: ImportOptions, collection: bpy.types.Collection) -> bpy.types.Object:
+    name = f"{options.prefix}_RIG".upper()
+    armature = bpy.data.armatures.new(name)
+    rig = bpy.data.objects.new(name, armature)
+    collection.objects.link(rig)
+
+    count = reader.getJointCount()
+    tx = np.asarray(reader.getNeutralJointTranslationXs(), np.float64) * options.scale
+    ty = np.asarray(reader.getNeutralJointTranslationYs(), np.float64) * options.scale
+    tz = np.asarray(reader.getNeutralJointTranslationZs(), np.float64) * options.scale
+    rx = np.asarray(reader.getNeutralJointRotationXs(), np.float64)
+    ry = np.asarray(reader.getNeutralJointRotationYs(), np.float64)
+    rz = np.asarray(reader.getNeutralJointRotationZs(), np.float64)
+    if options.rotation_degrees:
+        rx, ry, rz = np.radians(rx), np.radians(ry), np.radians(rz)
+
+    names = [str(reader.getJointName(i)) for i in range(count)]
+    parents = [int(reader.getJointParentIndex(i)) for i in range(count)]
+
+    # global (DNA space) matrix of every joint: parent_global @ (T @ E)
+    globals_: list[Matrix | None] = [None] * count
+    for i in range(count):
+        local = Matrix.Translation(Vector((tx[i], ty[i], tz[i]))) @ Matrix(euler_xyz_matrix(rx[i], ry[i], rz[i]).tolist()).to_4x4()
+        parent = parents[i]
+        if parent < 0 or parent == i:
+            globals_[i] = local
+        else:
+            if globals_[parent] is None:
+                raise RuntimeError(f"Joint '{names[i]}' is listed before its parent; unsupported DNA joint order")
+            globals_[i] = globals_[parent] @ local
+
+    view_layer = bpy.context.view_layer
+    for obj in view_layer.objects.selected:
+        obj.select_set(False)
+    view_layer.objects.active = rig
+    rig.select_set(True)
+    bpy.ops.object.mode_set(mode="EDIT")
+    try:
+        edit_bones = armature.edit_bones
+        bone_length = max(options.scale, 1e-4)
+        created = []
+        for i in range(count):
+            bone = edit_bones.new(names[i])
+            bone.length = bone_length
+            bone.matrix = Y_UP_TO_Z_UP @ globals_[i]
+            created.append(bone)
+        for i in range(count):
+            parent = parents[i]
+            if 0 <= parent != i:
+                created[i].parent = created[parent]
+    finally:
+        bpy.ops.object.mode_set(mode="OBJECT")
+
+    armature.relation_line_position = "HEAD"
+    organization.deformation_collections(rig)
+    return rig
+
+
+def _create_mesh(
+    reader, mesh_index: int, mesh_name: str, options: ImportOptions, rig, collection, joint_names, result,
+    side=None,
+) -> bpy.types.Object:
+    kind = _kind_of(mesh_name)
+    if side:
+        kind += '_'+side
+    object_name = f"{options.prefix}_{kind}".upper()
+    positions = _to_blender(
+        np.asarray(reader.getVertexPositionXs(mesh_index), np.float64),
+        np.asarray(reader.getVertexPositionYs(mesh_index), np.float64),
+        np.asarray(reader.getVertexPositionZs(mesh_index), np.float64),
+        options.scale,
+    )
+    layout_to_position = list(reader.getVertexLayoutPositionIndices(mesh_index))
+    layout_to_uv = list(reader.getVertexLayoutTextureCoordinateIndices(mesh_index))
+    layout_to_normal = list(reader.getVertexLayoutNormalIndices(mesh_index))
+
+    face_layouts = [list(reader.getFaceVertexLayoutIndices(mesh_index, f)) for f in range(reader.getFaceCount(mesh_index))]
+    vertex_indices = list(range(len(positions)))
+    if side:
+        # DNA X is anatomical left. Split whole disconnected eye-edge islands,
+        # never cut faces or regenerate their UVs/custom corner normals.
+        sign = 1 if side == 'L' else -1
+        vertex_indices = [i for i, p in enumerate(positions) if sign*p[0] > 0]
+        selected = set(vertex_indices)
+        for layouts in face_layouts:
+            count = sum(layout_to_position[i] in selected for i in layouts)
+            if 0 < count < len(layouts):
+                raise ValueError('Eye-edge face crosses the center plane; cannot split safely')
+        face_layouts = [ls for ls in face_layouts if all(layout_to_position[i] in selected for i in ls)]
+        if not face_layouts:
+            raise ValueError(f'No eye-edge faces on side {side}')
+    remap = {old: new for new, old in enumerate(vertex_indices)}
+    faces = [tuple(remap[layout_to_position[i]] for i in layouts) for layouts in face_layouts]
+    positions = positions[vertex_indices]
+    loop_layout = [i for layouts in face_layouts for i in layouts]
+
+    mesh = bpy.data.meshes.new(object_name)
+    try:
+        mesh.from_pydata(positions.tolist(), [], faces, shade_flat=False)
+    except TypeError:  # older signature without shade_flat
+        mesh.from_pydata(positions.tolist(), [], faces)
+        mesh.polygons.foreach_set("use_smooth", [True] * len(mesh.polygons))
+        mesh.update()
+
+    # UVs (one per loop, in the order of the faces above)
+    u_values = np.asarray(reader.getVertexTextureCoordinateUs(mesh_index), np.float32)
+    v_values = np.asarray(reader.getVertexTextureCoordinateVs(mesh_index), np.float32)
+    uv_index = np.asarray([layout_to_uv[i] for i in loop_layout], np.int64)
+    uv_layer = mesh.uv_layers.new(name="UVMap")
+    if len(uv_layer.data) == len(loop_layout):
+        uv_flat = np.empty((len(loop_layout), 2), np.float32)
+        uv_flat[:, 0] = u_values[uv_index]
+        uv_flat[:, 1] = v_values[uv_index]
+        uv_layer.data.foreach_set("uv", uv_flat.ravel())
+    else:
+        result.warnings.append(f"{object_name}: UV count mismatch, UVs were skipped")
+
+    # DNA normals as custom split normals (keeps seams and eye regions shading like in MetaHuman)
+    try:
+        nx = np.asarray(reader.getVertexNormalXs(mesh_index), np.float64)
+        ny = np.asarray(reader.getVertexNormalYs(mesh_index), np.float64)
+        nz = np.asarray(reader.getVertexNormalZs(mesh_index), np.float64)
+        normal_index = np.asarray([layout_to_normal[i] for i in loop_layout], np.int64)
+        normals = _to_blender(nx[normal_index], ny[normal_index], nz[normal_index], 1.0)
+        lengths = np.linalg.norm(normals, axis=1)
+        bad = lengths < 1e-8
+        normals[bad] = (0.0, 0.0, 1.0)
+        lengths[bad] = 1.0
+        normals /= lengths[:, None]
+        if len(mesh.loops) == len(normals):
+            mesh.normals_split_custom_set(normals.tolist())
+    except Exception as error:  # noqa: BLE001
+        result.warnings.append(f"{object_name}: custom normals skipped ({type(error).__name__}: {error})")
+
+    obj = bpy.data.objects.new(object_name, mesh)
+    collection.objects.link(obj)
+
+    # exactly one material slot per mesh; the material is a plain, empty datablock
+    material = bpy.data.materials.get(f"{options.prefix}_{kind}") or bpy.data.materials.new(f"{options.prefix}_{kind}")
+    mesh.materials.append(material)
+
+    # skin weights
+    groups: dict[int, bpy.types.VertexGroup] = {}
+    for vertex, original_vertex in enumerate(vertex_indices):
+        joint_indices = reader.getSkinWeightsJointIndices(mesh_index, original_vertex)
+        weights = reader.getSkinWeightsValues(mesh_index, original_vertex)
+        for joint, weight in zip(joint_indices, weights):
+            if weight <= 0.0:
+                continue
+            group = groups.get(joint)
+            if group is None:
+                group = groups[joint] = obj.vertex_groups.new(name=joint_names[joint])
+            group.add([vertex], float(weight), "REPLACE")
+
+    obj.parent = rig
+    modifier = obj.modifiers.new(name="Armature", type="ARMATURE")
+    modifier.object = rig
+    obj['mm_head_mesh'] = True
+    obj['mm_mesh_kind'] = kind
+    obj['mm_dna_mesh_index'] = int(mesh_index)
+    obj['mm_dna_vertex_indices'] = vertex_indices
+
+    return obj
+
+
+
+def import_head(reader, options: ImportOptions, progress=None) -> ImportResult:
+    """Create the collection, rig and meshes for the head DNA in ``reader``."""
+    scene = bpy.context.scene
+    collection = bpy.data.collections.new(options.prefix)
+    scene.collection.children.link(collection)
+
+    result = ImportResult(rig=None, collection=collection, prefix=options.prefix)  # type: ignore[arg-type]
+    joint_names = [str(reader.getJointName(i)) for i in range(reader.getJointCount())]
+    rig_collection = organization.child_collection(collection, "ARMATURE")
+    mesh_collection = organization.child_collection(collection, "HEAD")
+    organization.child_collection(collection, "RIGLOGICDATA")
+    result.rig = _create_rig(reader, options, rig_collection)
+    result.rig["mm_character_collection"] = collection.name
+    result.rig["mm_mesh_scope"] = True
+
+    lod_meshes = list(reader.getMeshIndicesForLOD(options.lod))
+    if not lod_meshes:
+        raise RuntimeError(f"The DNA file has no meshes for LOD{options.lod}")
+    for mesh_number, mesh_index in enumerate(lod_meshes):
+        mesh_name = str(reader.getMeshName(mesh_index))
+        kind = re.sub(r'[^a-z]', '', _kind_of(mesh_name).lower())
+        if kind in {'eyeshell', 'cartilage', 'eyecartilage'}:
+            continue
+        try:
+            for side in (('L', 'R') if kind == 'eyeedge' else (None,)):
+                obj = _create_mesh(reader, mesh_index, mesh_name, options, result.rig, mesh_collection, joint_names, result, side)
+                result.meshes.append(obj)
+        except Exception as error:  # noqa: BLE001 - keep importing the other meshes
+            logger.exception("Mesh '%s' failed", mesh_name)
+            result.warnings.append(f"Mesh '{mesh_name}' failed to import: {error}")
+        if progress is not None:
+            progress((mesh_number + 1) / len(lod_meshes))
+    return result

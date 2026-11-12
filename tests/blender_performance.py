@@ -1,6 +1,7 @@
 """Compare old/new driver performance and native bone accuracy against the DNA model."""
 import importlib.util
 from pathlib import Path
+WORK = __import__("runpy").run_path(str(Path(__file__).with_name("_paths.py")))["WORK"]
 import statistics
 import sys
 import time
@@ -21,12 +22,12 @@ rig = bake.find_baked_rig(bpy.context)
 board = bpy.data.objects[rig[bake.RIG_KEY_BOARD_OBJECT]]
 # Optional saved 1.0.8 expression compiler permits a same-session comparison
 # with both graphs freshly evaluated, rather than relying on saved driver caches.
-baseline_file = ROOT/'work'/'exprplan_baseline.py'
+baseline_file = WORK/'exprplan_baseline.py'
 current = None
 if baseline_file.exists():
     baseline_spec = importlib.util.spec_from_file_location('metamorphosis._baseline_exprplan', baseline_file)
     baseline = importlib.util.module_from_spec(baseline_spec); baseline_spec.loader.exec_module(baseline)
-    builder_spec = importlib.util.spec_from_file_location('metamorphosis._baseline_bakeplan', ROOT/'work'/'bakeplan_baseline.py')
+    builder_spec = importlib.util.spec_from_file_location('metamorphosis._baseline_bakeplan', WORK/'bakeplan_baseline.py')
     builder = importlib.util.module_from_spec(builder_spec); sys.modules[builder_spec.name] = builder; builder_spec.loader.exec_module(builder)
     builder.fmt_num, builder.plan_sum, builder.plan_prod = baseline.fmt_num, baseline.plan_sum, baseline.plan_prod
     current = pipeline.bakeplan

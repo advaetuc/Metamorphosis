@@ -2,6 +2,7 @@
 import importlib.util
 import json
 from pathlib import Path
+WORK = __import__("runpy").run_path(str(Path(__file__).with_name("_paths.py")))["WORK"]
 import sys
 import time
 import faulthandler
@@ -39,7 +40,7 @@ control = int(next(c[0] for c in ex.choices(rig) if c[1] == 'CTRL_expressions.mo
 source = rig[bake.RIG_KEY_DNA]; counts = bake.validate_rig(rig)
 base = sculpt.coords(head.data)
 reader = dnaio.open_reader(Path(source)); records = expression_dna.records(reader); dnaio.release_handle(reader)
-filename = ROOT/'work'/('expression_rollback_'+str(time.time_ns())+'.dna')
+filename = WORK/('expression_rollback_'+str(time.time_ns())+'.dna')
 
 # Context can be empty even while the actual view-layer active object exists.
 with bpy.context.temp_override(object=None, active_object=None, selected_objects=[], selected_editable_objects=[]):
@@ -84,7 +85,7 @@ ex.cancel(rig)
 pose(0); sculpt.start(rig)
 sculpt.set_coords(head.data, base*1.01)
 sculpt._active.update(force=True)
-prepared = ROOT/'work'/('expression_neutral_'+str(time.time_ns())+'.dna')
+prepared = WORK/('expression_neutral_'+str(time.time_ns())+'.dna')
 sculpt.prepare(rig, prepared)
 assert np.max(abs(pose(0)-neutral*1.01)) < 2e-6
 assert np.max(abs(pose(1)-posed*1.01)) < 1e-4
@@ -98,7 +99,7 @@ neutral = pose(0); pose(.6)
 work = ex.start(rig, control)
 target = sculpt.coords(work.data); target[150, 1] += .0003
 sculpt.set_coords(work.data, target)
-ex.finish(rig, ROOT/'work'/('expression_partial_'+str(time.time_ns())+'.dna'))
+ex.finish(rig, WORK/('expression_partial_'+str(time.time_ns())+'.dna'))
 assert np.max(abs(pose(.6)-target)) < 5e-6
 assert np.max(abs(pose(0)-neutral)) < 1e-6
 left_only = pose(1)
@@ -108,7 +109,7 @@ right = int(next(c[0] for c in ex.choices(rig) if c[1] == 'CTRL_expressions.mout
 work = ex.start(rig, right)
 target = sculpt.coords(work.data); target[250, 1] += .0003
 sculpt.set_coords(work.data, target)
-second = ex.finish(rig, ROOT/'work'/('expression_second_'+str(time.time_ns())+'.dna'))
+second = ex.finish(rig, WORK/('expression_second_'+str(time.time_ns())+'.dna'))
 assert np.max(abs(ex.evaluated(head)-target)) < 5e-6
 assert np.max(abs(pose(0)-neutral)) < 1e-6
 assert np.max(abs(pose(1)-left_only)) < 1e-6

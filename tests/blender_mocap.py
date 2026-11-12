@@ -2,6 +2,7 @@
 import importlib.util
 import json
 from pathlib import Path
+WORK = __import__("runpy").run_path(str(Path(__file__).with_name("_paths.py")))["WORK"]
 import socket
 import struct
 import sys
@@ -133,7 +134,7 @@ if len(args) > 1:
     scene.frame_set(min(end, 70)); bpy.context.view_layer.update()
     new = [p.matrix.copy() for p in rig.pose.bones if p.name.startswith('FACIAL_')]
     assert max(abs(a-b) for x,y in zip(old,new) for r,s in zip(x,y) for a,b in zip(r,s)) > 1e-4
-    output = ROOT/'work'/'mocap_video_result.blend'
+    output = WORK/'mocap_video_result.blend'
     bpy.ops.wm.save_as_mainfile(filepath=str(output))
     addon.unregister()
     bpy.ops.wm.open_mainfile(filepath=str(output))
