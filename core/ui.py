@@ -8,6 +8,7 @@ from bpy.props import FloatVectorProperty
 from ..riglogic import bake
 from ..capture import mocap
 from .constants import LABEL
+from . import materials
 
 _previews=None
 
@@ -41,14 +42,15 @@ class MM_PT_panel(bpy.types.Panel):
         box = layout.box()
         box.label(text="Character Setup", icon='IMPORT')
         box.prop(context.scene, 'mm_texture_folder', text="Texture Source")
-        if bake.find_baked_rig(context):
+        head_rig, body_rig = materials.find_character_rigs(context)
+        if head_rig or body_rig:
             box.operator('metamorphosis.setup_materials', text="Apply Materials", icon='MATERIAL')
         row = layout.row(align=True)
         row.scale_y = 1.35
         row.operator("metamorphosis.import_dna", text="Import DNA", icon="FILE_FOLDER")
         row.operator("metamorphosis.remove_all", text="Remove", icon="TRASH")
 
-        rig = bake.find_baked_rig(context)
+        rig = head_rig or body_rig
         if rig is None:
             box = layout.box()
             box.label(text="Ready for your character", icon="INFO")
@@ -57,19 +59,23 @@ class MM_PT_panel(bpy.types.Panel):
         box = layout.box()
         box.label(text="Active Character", icon="ARMATURE_DATA")
         box.label(text=rig.name, icon="OUTLINER_OB_ARMATURE")
-        box.label(text=f"{rig.get('mm_quality', 'LITE').title()} rig · Native drivers", icon="DRIVER")
+        if bake.RIG_KEY_DATA in rig:
+            box.label(text=f"{rig.get('mm_quality', 'LITE').title()} rig · Native drivers", icon="DRIVER")
+        elif rig.get('mm_body_rig'):
+            box.label(text="Body rig · Native correctives", icon="DRIVER")
         if rig.get("mm_stats"):
             for part in str(rig["mm_stats"]).split(", "):
                 box.label(text=part, icon="DOT")
-        layout.separator()
-        box = layout.box()
-        box.label(text="Rig Controls", icon="POSE_HLT")
-        row = box.row(align=True)
-        op = row.operator("metamorphosis.toggle_rig", text="Enable", icon="PLAY")
-        op.enable = True
-        op = row.operator("metamorphosis.toggle_rig", text="Disable", icon="PAUSE")
-        op.enable = False
-        box.operator("metamorphosis.rebuild", text="Rebuild Drivers", icon="FILE_REFRESH")
+        if bake.RIG_KEY_DATA in rig:
+            layout.separator()
+            box = layout.box()
+            box.label(text="Rig Controls", icon="POSE_HLT")
+            row = box.row(align=True)
+            op = row.operator("metamorphosis.toggle_rig", text="Enable", icon="PLAY")
+            op.enable = True
+            op = row.operator("metamorphosis.toggle_rig", text="Disable", icon="PAUSE")
+            op.enable = False
+            box.operator("metamorphosis.rebuild", text="Rebuild Drivers", icon="FILE_REFRESH")
 
 
 class MM_PT_customization(bpy.types.Panel):

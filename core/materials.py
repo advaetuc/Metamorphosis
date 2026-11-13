@@ -72,14 +72,16 @@ def texture_files(folder):
             for file in sorted(directory.iterdir()):
                 if file.is_file() and file.suffix.lower() in {'.png', '.tga', '.jpg', '.jpeg', '.exr'}:
                     files.setdefault(file.stem.lower(), file)
-    if 'head_basecolor' not in files:
-        raise ValueError('Head_Basecolor texture not found in the selected export')
-    # These maps are shared by all characters and never require an external path.
+    if 'head_basecolor' not in files and 'body_basecolor' not in files:
+        raise ValueError('Neither Head_Basecolor nor Body_Basecolor texture found in the selected export')
+    if 'eyelashes_color' in files and 'eyelashes_alpha' not in files:
+        files['eyelashes_alpha'] = files['eyelashes_color']
+    # These maps are shared by all characters and fall back to bundled assets if not in character export.
     for name in UNIVERSAL_TEXTURES:
         path = ASSET.parent/name
         if not path.is_file():
             raise ValueError(f'Bundled material texture is missing: {name}')
-        files[path.stem.lower()] = path
+        files.setdefault(path.stem.lower(), path)
     return files
 
 
@@ -262,7 +264,10 @@ def socket(tree, name, kind, direction='INPUT', default=None):
 
 def detail_group(prefix, files):
     """Keep tiling/mixing and tangent-space detail out of the main material view."""
-    tree = bpy.data.node_groups.new(caps(prefix+'_SKIN_DETAIL'), 'ShaderNodeTree')
+    name = caps(prefix+'_SKIN_DETAIL')
+    if name in bpy.data.node_groups:
+        return bpy.data.node_groups[name]
+    tree = bpy.data.node_groups.new(name, 'ShaderNodeTree')
     socket(tree, 'BASE_NORMAL', 'Vector')
     socket(tree, 'DETAIL_STRENGTH', 'Float', default=.15)
     socket(tree, 'DETAIL_TILING', 'Float', default=20)
@@ -403,6 +408,67 @@ def head_material(tree, bsdf, files, prefix, scale):
     return weights
 
 
+def body_group(prefix, files):
+    name = caps(prefix+'_BODY_MATERIAL')
+    if name in bpy.data.node_groups:
+        return bpy.data.node_groups[name]
+    tree = bpy.data.node_groups.new(name, 'ShaderNodeTree')
+    socket(tree, 'BASE_COLOR', 'Color', default=(.5,.5,.5,1))
+    socket(tree, 'BASE_NORMAL', 'Color', default=(.5,.5,1,1))
+    socket(tree, 'SPECULAR_ROUGHNESS_METALLIC', 'Color', default=(.5,.45,0,1))
+    socket(tree, 'FUZZ_MASK', 'Float', default=0)
+    socket(tree, 'DETAIL_STRENGTH', 'Float', default=.15)
+    socket(tree, 'DETAIL_TILING', 'Float', default=20)
+    for name, kind in (('COLOR','Color'), ('NORMAL','Vector'), ('SPECULAR','Float'),
+                       ('ROUGHNESS','Float'), ('METALLIC','Float'), ('SHEEN','Float')):
+        socket(tree, name, kind, 'OUTPUT')
+    entry = node(tree, 'NodeGroupInput', 'TEXTURES_AND_SETTINGS', -700, 300)
+    entry.width = 260
+    out = node(tree, 'NodeGroupOutput', 'SURFACE_CHANNELS', 600, 300)
+    tree.links.new(entry.outputs['BASE_COLOR'], out.inputs['COLOR'])
+    tangent = normal(tree, entry.outputs['BASE_NORMAL'], None, -70, 100)
+    detail = node(tree, 'ShaderNodeGroup', 'SKIN_DETAIL', 170, 100)
+    detail.node_tree = detail_group(prefix, files)
+    tree.links.new(tangent.outputs[0], detail.inputs['BASE_NORMAL'])
+    for name in ('DETAIL_STRENGTH', 'DETAIL_TILING'):
+        tree.links.new(entry.outputs[name], detail.inputs[name])
+    tree.links.new(detail.outputs['NORMAL'], out.inputs['NORMAL'])
+    packed = node(tree, 'ShaderNodeSeparateColor', 'SRMF_CHANNELS', -350, -300)
+    tree.links.new(entry.outputs['SPECULAR_ROUGHNESS_METALLIC'], packed.inputs[0])
+    for channel, name in (('Red','SPECULAR'), ('Green','ROUGHNESS'), ('Blue','METALLIC')):
+        tree.links.new(packed.outputs[channel], out.inputs[name])
+    fuzz = node(tree, 'ShaderNodeMath', 'FUZZ_STRENGTH', -70, -300)
+    fuzz.operation = 'MULTIPLY'; fuzz.inputs[1].default_value = .15
+    tree.links.new(entry.outputs['FUZZ_MASK'], fuzz.inputs[0])
+    tree.links.new(fuzz.outputs[0], out.inputs['SHEEN'])
+    return tree
+
+
+def body_material(tree, bsdf, files, prefix, scale):
+    bsdf.inputs['Subsurface Weight'].default_value = .4
+    bsdf.inputs['Subsurface Radius'].default_value = (1, .2, .1)
+    bsdf.inputs['Subsurface Scale'].default_value = .005*scale/.01
+    bsdf.inputs['IOR'].default_value = 1.4
+    g = node(tree, 'ShaderNodeGroup', 'BODY_MATERIAL', 0, 300)
+    g.width = 280
+    g.node_tree = body_group(prefix, files)
+    base = texture(tree, files, 'Body_Basecolor', True)
+    norm = texture(tree, files, 'Body_Normal')
+    packed = texture(tree, files, 'Body_SRMF')
+    if base:
+        tree.links.new(base.outputs['Color'], g.inputs['BASE_COLOR'])
+    if norm:
+        tree.links.new(norm.outputs['Color'], g.inputs['BASE_NORMAL'])
+    if packed:
+        tree.links.new(packed.outputs['Color'], g.inputs['SPECULAR_ROUGHNESS_METALLIC'])
+        tree.links.new(packed.outputs['Alpha'], g.inputs['FUZZ_MASK'])
+    frame(tree, 'BASE_TEXTURES', [(base,0,0),(norm,260,0),(packed,520,0)], (-1100,350))
+    for source, target in (('COLOR','Base Color'), ('NORMAL','Normal'), ('SPECULAR','Specular IOR Level'),
+                           ('ROUGHNESS','Roughness'), ('METALLIC','Metallic'), ('SHEEN','Sheen Weight')):
+        tree.links.new(g.outputs[source], bsdf.inputs[target])
+    return g
+
+
 def eye_edge_material(prefix, side):
     with bpy.data.libraries.load(str(EYE_EDGE_ASSET), link=False) as (_, target):
         target.materials = ['MM_EYE_EDGE_'+side]
@@ -442,10 +508,38 @@ def eye_edge_material(prefix, side):
     return mat
 
 
-def setup(reader, model, variant, rig, board, meshes, folder, collection, prefix, lod=0):
+def find_character_rigs(context):
+    """Find the active or scene head and body rigs."""
+    active = context.active_object
+    active_arm = active if active and active.type == 'ARMATURE' else (active.parent if active and active.parent and active.parent.type == 'ARMATURE' else None)
+    head_rig = None
+    body_rig = None
+    if active_arm:
+        if bake.RIG_KEY_DATA in active_arm:
+            head_rig = active_arm
+        if active_arm.get('mm_body_rig'):
+            body_rig = active_arm
+    for o in context.scene.objects:
+        if o.type == 'ARMATURE':
+            if head_rig is None and bake.RIG_KEY_DATA in o:
+                head_rig = o
+            if body_rig is None and o.get('mm_body_rig'):
+                body_rig = o
+    return head_rig, body_rig
+
+
+def body_meshes(rig):
+    if rig is None:
+        return []
+    return [o for o in bpy.data.objects if o.type == 'MESH' and o.parent == rig
+            and (o.get('mm_body_mesh') or str(o.get('mm_mesh_kind','')).lower() == 'body')]
+
+
+def setup(reader, model, variant, rig, board, meshes, folder, collection, prefix, lod=0, body_rig=None):
     files = texture_files(folder)
     before = cleanup.snapshot()
-    token = rig.get(cleanup.OWNER) or cleanup.new_token()
+    primary_rig = rig or body_rig
+    token = primary_rig.get(cleanup.OWNER) or cleanup.new_token()
     material_set = cleanup.new_token()
     assignments, warnings, holders = [], [], []
     driver_count = 0
@@ -469,10 +563,21 @@ def setup(reader, model, variant, rig, board, meshes, folder, collection, prefix
                 category, color, norm = caps(kind), '', ''
                 if 'eyeedge' in kind:
                     warnings.append('Legacy combined eye-edge mesh: reimport DNA for separate left/right procedural eye edges')
+            elif 'body' in kind or mesh.get('mm_body_mesh'):
+                category, color, norm = 'BODY', 'Body_Basecolor', 'Body_Normal'
             else:
                 warnings.append(f'No material preset for {mesh.name}; existing slots preserved')
                 continue
-            mat = bpy.data.materials.new(caps(prefix+'_'+category))
+            if category == 'HEAD' and 'head_basecolor' not in files:
+                warnings.append('Head_Basecolor texture not found; head material skipped')
+                continue
+            if category == 'BODY' and 'body_basecolor' not in files:
+                warnings.append('Body_Basecolor texture not found; body material skipped')
+                continue
+            mat_prefix = prefix
+            if category == 'BODY' and body_rig:
+                mat_prefix = body_rig.get('mm_body_prefix') or (body_rig.name.replace('_RIG','') if body_rig.name.endswith('_RIG') else body_rig.name)
+            mat = bpy.data.materials.new(caps(mat_prefix+'_'+category))
             mat['mm_material_version'] = '1.2.0'
             tree = mat.node_tree
             tree.nodes.clear()
@@ -480,21 +585,26 @@ def setup(reader, model, variant, rig, board, meshes, folder, collection, prefix
             bsdf.width = 240
             output = node(tree, 'ShaderNodeOutputMaterial', 'MATERIAL_OUTPUT', 760, 300)
             tree.links.new(bsdf.outputs[0], output.inputs['Surface'])
-            base = texture(tree, files, color, True, x=-500, y=400) if color and category != 'HEAD' else None
-            nm = texture(tree, files, norm, x=-500, y=0) if norm and category != 'HEAD' else None
+            base = texture(tree, files, color, True, x=-500, y=400) if color and category not in ('HEAD', 'BODY') else None
+            nm = texture(tree, files, norm, x=-500, y=0) if norm and category not in ('HEAD', 'BODY') else None
             if base:
                 tree.links.new(base.outputs['Color'], bsdf.inputs['Base Color'])
-            elif color and category != 'HEAD':
+            elif color and category not in ('HEAD', 'BODY'):
                 warnings.append(f'{color} is missing; using a fallback material')
             if nm:
                 normal(tree, nm.outputs['Color'], bsdf)
             if category == 'HEAD':
-                g = head_material(tree,bsdf,files,prefix,float(rig.get(bake.RIG_KEY_SCALE,.01)))
-                if g:
-                    count, new_holders = realize_wrinkles(reader,model,variant,rig,board,g,collection,prefix,lod)
+                scale = float(rig.get(bake.RIG_KEY_SCALE, .01) if rig else .01)
+                g = head_material(tree, bsdf, files, prefix, scale)
+                if g and reader and model and board:
+                    count, new_holders = realize_wrinkles(reader, model, variant, rig, board, g, collection, prefix, lod)
                     driver_count += count; holders += new_holders
-                else:
-                    warnings.append('Animated normal maps missing; head uses static shading')
+                elif g:
+                    warnings.append('Animated normal maps missing or static rig; head uses static shading')
+                frame(tree, 'SURFACE_OUTPUT', [(bsdf,0,0),(output,320,0)], (400,300))
+            elif category == 'BODY':
+                scale = float(body_rig.get('mm_body_scale', primary_rig.get('mm_body_scale', primary_rig.get(bake.RIG_KEY_SCALE, .01))) if body_rig else primary_rig.get('mm_body_scale', primary_rig.get(bake.RIG_KEY_SCALE, .01)))
+                body_material(tree, bsdf, files, mat_prefix, scale)
                 frame(tree, 'SURFACE_OUTPUT', [(bsdf,0,0),(output,320,0)], (400,300))
             elif category == 'TEETH':
                 bsdf.inputs['Roughness'].default_value = .28
@@ -515,12 +625,13 @@ def setup(reader, model, variant, rig, board, meshes, folder, collection, prefix
                 tree.links.new(geometry.outputs['Normal'], bsdf.inputs['Coat Normal'])
                 bsdf.inputs['Subsurface Weight'].default_value = .025
                 bsdf.inputs['Subsurface Radius'].default_value = (1.0, .35, .2)
-                bsdf.inputs['Subsurface Scale'].default_value = .00025 * float(rig.get(bake.RIG_KEY_SCALE, .01)) / .01
+                bsdf.inputs['Subsurface Scale'].default_value = .00025 * float(primary_rig.get(bake.RIG_KEY_SCALE, .01)) / .01
             elif category == 'EYELASHES':
                 bsdf.inputs['Base Color'].default_value = (.015,.008,.005,1)
                 alpha = texture(tree, files, 'EyeLashes_Alpha', x=-200, y=300)
                 # The supplied image is grayscale coverage, not its opaque PNG alpha.
-                tree.links.new(alpha.outputs['Color'],bsdf.inputs['Alpha'])
+                if alpha:
+                    tree.links.new(alpha.outputs['Color'],bsdf.inputs['Alpha'])
                 bsdf.inputs['Roughness'].default_value = .4
             else:
                 # Transparent wet overlay preserves the iris and mouth below it.
@@ -528,6 +639,8 @@ def setup(reader, model, variant, rig, board, meshes, folder, collection, prefix
                 transparent = node(tree,'ShaderNodeBsdfTransparent','CLEAR_OVERLAY',700,-100)
                 tree.links.new(transparent.outputs[0],output.inputs['Surface'])
             assignments.append((mesh,mat))
+        if not assignments:
+            raise ValueError('No matching character textures found in the selected folder')
         old_sets = {mesh.data.materials[0].get('mm_material_set') for mesh,mat in assignments
                     if mesh.data.materials and mesh.data.materials[0]}
         for mesh, mat in assignments:
@@ -535,8 +648,10 @@ def setup(reader, model, variant, rig, board, meshes, folder, collection, prefix
                 mesh.data.materials[0] = mat
             else:
                 mesh.data.materials.append(mat)
-        rig['mm_texture_folder'] = str(Path(bpy.path.abspath(folder)))
-        rig['mm_material_drivers'] = driver_count
+        for r in {r for r in (rig, body_rig) if r is not None}:
+            r['mm_texture_folder'] = str(Path(bpy.path.abspath(folder)))
+            if r == rig and driver_count:
+                r['mm_material_drivers'] = driver_count
     except Exception:
         # No assignment occurs until every material is built successfully.
         created = [item for pool in cleanup.POOLS for item in getattr(bpy.data,pool)
@@ -560,28 +675,44 @@ class MM_OT_materials(bpy.types.Operator):
     bl_options = {'REGISTER','UNDO'}
 
     def execute(self,context):
-        rig = bake.find_baked_rig(context)
+        folder = context.scene.mm_texture_folder
+        if not folder:
+            self.report({'ERROR'}, 'Choose a texture source folder'); return {'CANCELLED'}
+        head_rig, body_rig = find_character_rigs(context)
+        if head_rig is None and body_rig is None:
+            self.report({'ERROR'}, 'Select an imported head or body rig'); return {'CANCELLED'}
         reader = None
         try:
-            if rig is None:
-                raise ValueError('Select an imported head rig')
-            from .operators import get_preferences
-            prefs = get_preferences(context)
-            bindings = prefs.bindings_folder if prefs else ''
-            reader = dnaio.open_reader(Path(rig[bake.RIG_KEY_DNA]),bindings)
-            model = RigLogicModel.from_reader(reader)
-            _, rl, _ = dnaio.load_bindings(bindings)
-            result = verify.verify_model(model,rl,reader,release=dnaio.release_handle)
-            if result.status == 'failed':
-                raise ValueError(result.message)
-            board = bpy.data.objects.get(rig[bake.RIG_KEY_BOARD_OBJECT])
-            report = setup(reader,model,result.variant or model.variants()[0],rig,board,
-                           bake.head_meshes(rig),context.scene.mm_texture_folder,
-                           rig.users_collection[0],rig[bake.RIG_KEY_PREFIX],int(rig.get('mm_lod',0)))
+            head_m = bake.head_meshes(head_rig) if head_rig else []
+            body_m = body_meshes(body_rig) if body_rig else []
+            all_meshes = head_m + body_m
+            if not all_meshes:
+                raise ValueError('No head or body meshes found to apply materials to')
+            model = None
+            variant = None
+            board = None
+            if head_rig and head_m:
+                from .operators import get_preferences
+                prefs = get_preferences(context)
+                bindings = prefs.bindings_folder if prefs else ''
+                reader = dnaio.open_reader(Path(head_rig[bake.RIG_KEY_DNA]), bindings)
+                model = RigLogicModel.from_reader(reader)
+                _, rl, _ = dnaio.load_bindings(bindings)
+                result = verify.verify_model(model, rl, reader, release=dnaio.release_handle)
+                if result.status == 'failed':
+                    raise ValueError(result.message)
+                variant = result.variant or model.variants()[0]
+                board = bpy.data.objects.get(str(head_rig.get(bake.RIG_KEY_BOARD_OBJECT, '')))
+            primary_rig = head_rig or body_rig
+            collection = primary_rig.users_collection[0] if primary_rig.users_collection else context.scene.collection
+            prefix = primary_rig.get(bake.RIG_KEY_PREFIX) or primary_rig.name.replace('_RIG', '')
+            lod = int(primary_rig.get('mm_lod', 0))
+            report = setup(reader, model, variant, head_rig or primary_rig, board,
+                           all_meshes, folder, collection, prefix, lod, body_rig=body_rig)
             bake.write_report(report)
-            self.report({'INFO'},report[0])
+            self.report({'INFO'}, report[0])
         except Exception as error:
-            self.report({'ERROR'},str(error)); return {'CANCELLED'}
+            self.report({'ERROR'}, str(error)); return {'CANCELLED'}
         finally:
             if reader is not None:
                 dnaio.release_handle(reader)
