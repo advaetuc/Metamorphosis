@@ -57,6 +57,10 @@ def merge(context,body,head):
     if body==head or not body.get('mm_body_rig') or bake.RIG_KEY_DATA not in head:
         raise ValueError('Select one imported body rig and one imported head rig')
     if body.get(bake.RIG_KEY_DATA):raise ValueError('This body already has an attached head')
+    if context.object and context.object.mode!='OBJECT':
+        bpy.ops.object.mode_set(mode='OBJECT')
+    sculpt.set_mode(body,'OBJECT')
+    sculpt.set_mode(head,'OBJECT')
     for rig in (body,head):
         if rig.library or rig.data.users!=1 or len(rig.users_scene)!=1:
             raise ValueError('Use local, single-user rigs before connecting the head and body')
@@ -92,13 +96,20 @@ def merge(context,body,head):
     body['mm_body_joint_map']=json.dumps(renames)
     if board==head:
         previous=set(bpy.data.objects)
+        for obj in list(context.view_layer.objects.selected):
+            obj.select_set(False)
+        context.view_layer.objects.active=head
+        head.select_set(True)
         with sculpt.object_context(head):
             sculpt.set_mode(head,'EDIT')
             for bone in head.data.edit_bones:
                 bone.select=bone.select_head=bone.select_tail=bone.name in board_names
             bpy.ops.armature.separate()
             sculpt.set_mode(head,'OBJECT')
-        board=next(o for o in set(bpy.data.objects)-previous if o.type=='ARMATURE')
+        new_armatures=[o for o in set(bpy.data.objects)-previous if o.type=='ARMATURE']
+        board=next((o for o in new_armatures if any(b.name in board_names for b in o.data.bones)),None)
+        if board is None:
+            board=next(iter(new_armatures))
         board.name=head.name+'_FACE_BOARD'
         if board.animation_data:
             for curve in list(board.animation_data.drivers):
@@ -131,6 +142,8 @@ def merge(context,body,head):
         child.matrix_world=world
     with sculpt.object_context(body):
         sculpt.set_mode(body,'EDIT')
+        for b in body.data.edit_bones:
+            b.select=b.select_head=b.select_tail=False
         for name,parent in renames.items():
             bone=body.data.edit_bones[name]
             bone.use_connect=False;bone.parent=body.data.edit_bones[parent]
@@ -150,6 +163,10 @@ def merge(context,body,head):
     context.view_layer.update()
     constraint.inverse_matrix=(body.matrix_world@body.pose.bones['head'].matrix).inverted()
     context.view_layer.update()
+    for obj in list(context.view_layer.objects.selected):
+        obj.select_set(False)
+    body.select_set(True)
+    context.view_layer.objects.active=body
     return body,board
 
 

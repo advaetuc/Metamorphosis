@@ -44,7 +44,7 @@ def prepare(rig, source, mapping):
             pelvis=position('pelvis');height=position('head').z-position('root').z
             spine01=position('spine_01')
             make('TORSO',pelvis,pelvis+Vector((0,.175,0)),'ROOT',z=(0,0,1))
-            hips_tail=pelvis+(spine01-pelvis)*.7 if (spine01-pelvis).length>height*.02 else pelvis+Vector((0,height*.06,0))
+            hips_tail=pelvis+(spine01-pelvis)*.7 if (spine01-pelvis).length>1e-4 else pelvis+Vector((0,0,height*.02))
             make('HIPS',pelvis,hips_tail,'TORSO')
             make('PELVIS_TWEAK',pelvis,pelvis+Vector((0,0,height*.04)),'HIPS')
             new_controls+=['TORSO','HIPS'];new_tweaks+=['PELVIS_TWEAK']
