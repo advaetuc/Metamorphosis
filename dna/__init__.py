@@ -2,6 +2,7 @@
 from . import (
     dnaio,
     faceboard,
+    head_shapes,
     import_job,
     import_worker,
     importer,

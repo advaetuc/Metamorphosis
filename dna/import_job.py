@@ -56,6 +56,12 @@ class Job:
             report=bpy.data.texts.get('MetaMorphosis Report') or bpy.data.texts.new('MetaMorphosis Report')
             report.clear();report.write(result['report'])
             context.view_layer.update()
+            try:
+                from ..core import organization
+                organization.remove_custom_normals(created_objects)
+                organization.close_all_collections(context)
+            except Exception:
+                pass
             return rig
         except Exception:
             created=[item for pool in cleanup.POOLS for item in getattr(bpy.data,pool) if item.as_pointer() not in before[pool]]

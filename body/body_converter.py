@@ -319,10 +319,12 @@ def convert(rig,collection,shape_preset='UNREAL'):
 
 
 def _resolve_body_rig(context):
-    obj = context.object
+    obj = getattr(context, 'active_object', None) or getattr(context, 'object', None)
     if obj and obj.type == 'MESH':
         obj = next((m.object for m in obj.modifiers if m.type == 'ARMATURE' and m.object), None)
-    return obj
+    if obj and obj.type == 'ARMATURE' and (obj.get('mm_body_rig') or 'pelvis' in obj.data.bones):
+        return obj
+    return next((o for o in context.scene.objects if o.type == 'ARMATURE' and (o.get('mm_body_rig') or 'pelvis' in o.data.bones)), None)
 
 
 class MM_OT_convert_body(bpy.types.Operator):
@@ -357,6 +359,11 @@ class MM_OT_convert_body(bpy.types.Operator):
             convert(rig,rig.users_collection[0],shape_preset=preset)
             token=rig.get('mm_import_id') or cleanup.new_token()
             cleanup.mark_created(before,token)
+            try:
+                from ..core import organization
+                organization.close_all_collections(context)
+            except Exception:
+                pass
             self.report({'INFO'},f'Control rig built ({preset.title()} shapes); native correctives retained')
             return {'FINISHED'}
         except Exception as exc:

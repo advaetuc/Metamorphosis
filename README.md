@@ -4,11 +4,13 @@
 
 <p align="center">
   <strong>MetaHuman heads · Native facial drivers · Capture · Animated materials</strong><br>
-  Version <strong>2.10</strong> · Blender <strong>5.0+</strong> · <strong>Lite</strong> rig mode
+  Version <strong>2.80</strong> · Blender <strong>5.0+</strong> · <strong>Lite</strong> rig mode
 </p>
 
 <p align="center">
   <a href="#quick-start">Quick start</a> ·
+  <a href="#character-assembly">Character Assembly</a> ·
+  <a href="#grooms-and-hair">Grooms</a> ·
   <a href="#materials-and-wrinkles">Materials</a> ·
   <a href="#facial-capture">Capture</a> ·
   <a href="#verification-and-performance">Verification</a> ·
@@ -23,22 +25,25 @@ MetaMorphosis imports a MetaHuman head DNA file, builds its original deformation
 
 | Feature | Current development stage |
 | :--- | :--- |
+| **Character Assembly (2.80)** | One-click assemble from `CharacterAssemblyManifest.json`: head & body DNA, body control rig, skeleton connection, maps, shaders, grooms, and clothes |
+| **Grooms & Hair (2.80)** | Import Alembic hair curves, Stick To Surface Geometry Nodes, Groom Shader with manifest color parameters, and automatic eyelash haircard deletion |
+| **Scene Settings & HDRI (2.80)** | HDRI lighting selector with visual thumbnails, custom HDRI import, clear button, and intensity slider |
+| **OG Face Rig Shapes (2.80)** | 870 custom bone widget shapes and blue/red/yellow bone color assignment from `New_Shapes_OG_Face_Rig.blend` |
 | **DNA import** | Head meshes, original skeleton, face board, organized object and bone collections |
 | **Native facial rig** | Lite-only drivers, shared middle-eye control, mouth/jaw combination correctives |
 | **Materials & wrinkles** | Compact shader groups, bundled detail/teeth/lash textures, procedural eye edges, native DNA animated-map drivers |
 | **Live Link Face** | Epic ARKit UDP preview, countdown recording and editable animation takes |
 | **MetaHuman Animator (development)** | Direct iPhone stream, DNA-based face-board mapping and native action baking; tested with Live Link Face 1.7.3 (185) |
 | **Video to Mocap** | Local facial tracking, background processing, cancellation and action baking |
-| **Custom body rig (2.10)** | Two-step native DNA import + Build Control Rig, selectable Unreal/Blender custom shapes, intact limb twist/pole falloff, Bake Rig UI for `Item`-tab panels. [Workflow and limits](docs/BODY_RIG.md) |
+| **Custom body rig** | Two-step native DNA import + Build Control Rig, selectable Unreal/Blender custom shapes, intact limb twist/pole falloff, Bake Rig UI for `Item`-tab panels. [Workflow and limits](docs/BODY_RIG.md) |
 | **Scene cleanup** | Remove All targets imported content and preserves unrelated/shared data |
-| **Customization** | Apply a user-selected color to face-board controls |
 | **Import experience** | Centered animated DNA progress overlay with clear stages and percentage |
 
 <p align="center">
   <img src="docs/images/native-workflow.svg" alt="DNA builds a native rig, DCC textures supply materials, and live or video capture produces editable actions. Native rig and wrinkle playback work without the add-on." width="100%">
 </p>
 
-**Update 2.10:** includes body control rig two-step import/build workflow, selectable Unreal or Blender custom shapes, `SPINE_05_FK` cleanup & face-aligned head/neck controls, full upper-arm/thigh Y-twist and IK pole deformation, and **Bake Rig UI** standalone **Item**-tab panels.
+**Update 2.80:** includes full Character Assembly from `CharacterAssemblyManifest.json` (head.dna, body.dna, control rig build, skeleton connection, materials/textures, grooms, and clothing), Grooms Setup with Stick To Surface Geometry Nodes & Groom Shader, eyelash haircard replacement (IMP_02), HDRI lighting environment dropdown with intensity control, 870 custom bone shapes and colors for the head rig, and automatic outliner collection organization.
 
 ## Quick start
 

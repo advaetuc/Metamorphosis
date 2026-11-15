@@ -1,6 +1,6 @@
 # Custom body rig converter
 
-Version **2.10**.
+Version **2.80**.
 
 ## Use
 

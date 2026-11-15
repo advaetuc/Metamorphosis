@@ -32,11 +32,11 @@ from .capture import (
     mha_live, mha_mapping, mocap, mocap_core, mocap_mapping, video_worker
 )
 from .core import (
-    cleanup, constants, materials, operators, organization,
+    assemble, camera, cleanup, constants, grooms, lighting, materials, operators, organization,
     preferences, progress_ui, ui
 )
 from .dna import (
-    dnaio, faceboard, import_job, import_worker, importer
+    dnaio, faceboard, head_shapes, import_job, import_worker, importer
 )
 from .riglogic import (
     bake, bakeplan, exprplan, logicmodel, native_sums, optimize, pipeline, verify
@@ -48,6 +48,7 @@ from .sculpting import (
 # Populate sys.modules for any direct imports like `import metamorphosis.logicmodel`
 _prefix = __name__ + "."
 for _name in (
+    "assemble", "camera", "grooms", "lighting", "head_shapes",
     "body_converter", "body_driverplan", "body_fields", "body_geometry",
     "body_merge", "body_rbf", "body_refine", "body_remap", "body_rig", "body_snap",
     "mha_live", "mha_mapping", "mocap", "mocap_core", "mocap_mapping", "video_worker",
@@ -66,12 +67,14 @@ _classes = (
     *mocap.CLASSES,
     *materials.CLASSES,
     *ui.CLASSES,
+    *lighting.CLASSES,
+    ui.MM_PT_face_board_color,
+    *grooms.CLASSES,
+    *assemble.CLASSES,
     *body_rig.CLASSES,
     *body_merge.CLASSES,
     *body_converter.CLASSES,
     *body_snap.CLASSES,
-    *sculpt.CLASSES,
-    *expression_sculpt.CLASSES,
 )
 
 
@@ -80,20 +83,27 @@ def register():
         bpy.utils.register_class(cls)
     mocap.register()
     materials.register()
-    sculpt.register()
     body_rig.register()
     ui.register()
+    lighting.register()
+    grooms.register()
+    assemble.register()
     bpy.types.TOPBAR_MT_file_import.append(operators.menu_import)
 
 
 def unregister():
     import_job.shutdown()
     progress_ui.end()
-    sculpt.unregister()
+    assemble.unregister()
+    grooms.unregister()
+    lighting.unregister()
     ui.unregister()
     body_rig.unregister()
     materials.unregister()
     mocap.unregister()
     bpy.types.TOPBAR_MT_file_import.remove(operators.menu_import)
     for cls in reversed(_classes):
-        bpy.utils.unregister_class(cls)
+        try:
+            bpy.utils.unregister_class(cls)
+        except Exception:
+            pass

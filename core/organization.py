@@ -12,6 +12,8 @@ def child_collection(parent, role):
             return child
     child = bpy.data.collections.new(role)
     child["mm_collection_role"] = role
+    if parent.get("mm_import_id"):
+        child["mm_import_id"] = parent["mm_import_id"]
     parent.children.link(child)
     return child
 
@@ -60,3 +62,83 @@ def organize_board(board, parent):
         if obj.type == "ARMATURE":
             obj.data.name = obj.data.name.upper()
             armature_display(obj)
+
+
+def remove_custom_normals(obj_or_objs):
+    """Automatically clear/remove custom split normals on imported mesh(es).
+
+    Uses direct attribute removal for instant C-level execution without operator
+    overhead, avoiding depsgraph evaluation cycles and UI freezes.
+    """
+    if obj_or_objs is None:
+        return
+    objs = obj_or_objs if isinstance(obj_or_objs, (list, tuple, set)) else [obj_or_objs]
+    for obj in objs:
+        if not obj or getattr(obj, "type", "") != "MESH":
+            continue
+        mesh = getattr(obj, "data", None)
+        if not mesh:
+            continue
+
+        changed = False
+
+        # 1. Direct attribute removal (Blender 4.1+, 5.x)
+        # Custom normals are stored as 'custom_normal' corner attribute.
+        # Removing this attribute clears custom split normals instantly in C.
+        if hasattr(mesh, "attributes") and "custom_normal" in mesh.attributes:
+            try:
+                mesh.attributes.remove(mesh.attributes["custom_normal"])
+                changed = True
+            except Exception:
+                pass
+
+        # 2. Fallback for legacy format if has_custom_normals remains True
+        if getattr(mesh, "has_custom_normals", False):
+            try:
+                with bpy.context.temp_override(
+                    object=obj,
+                    active_object=obj,
+                    selected_objects=[obj],
+                    selected_editable_objects=[obj],
+                ):
+                    bpy.ops.mesh.customdata_custom_splitnormals_clear()
+                changed = True
+            except Exception:
+                pass
+
+        # 3. Ensure smooth face shading across all polygons if any are flat
+        try:
+            if hasattr(mesh, "polygons") and len(mesh.polygons):
+                if any(not p.use_smooth for p in mesh.polygons):
+                    mesh.polygons.foreach_set("use_smooth", [True] * len(mesh.polygons))
+                    changed = True
+        except Exception:
+            pass
+
+        # Only trigger mesh.update() if normals or shading actually changed
+        if changed:
+            try:
+                mesh.update()
+            except Exception:
+                pass
+
+
+def close_all_collections(context: bpy.types.Context | None = None):
+    """Close/collapse all collection entries in the Outliner."""
+    wm = bpy.context.window_manager if context is None else getattr(context, "window_manager", bpy.context.window_manager)
+    if not wm:
+        return
+    for window in wm.windows:
+        screen = window.screen
+        if not screen:
+            continue
+        for area in screen.areas:
+            if area.type == "OUTLINER":
+                for region in area.regions:
+                    if region.type == "WINDOW":
+                        try:
+                            with bpy.context.temp_override(window=window, area=area, region=region):
+                                for _ in range(8):
+                                    bpy.ops.outliner.show_one_level(open=False)
+                        except Exception:
+                            pass

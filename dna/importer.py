@@ -189,25 +189,11 @@ def _create_mesh(
     else:
         result.warnings.append(f"{object_name}: UV count mismatch, UVs were skipped")
 
-    # DNA normals as custom split normals (keeps seams and eye regions shading like in MetaHuman)
-    try:
-        nx = np.asarray(reader.getVertexNormalXs(mesh_index), np.float64)
-        ny = np.asarray(reader.getVertexNormalYs(mesh_index), np.float64)
-        nz = np.asarray(reader.getVertexNormalZs(mesh_index), np.float64)
-        normal_index = np.asarray([layout_to_normal[i] for i in loop_layout], np.int64)
-        normals = _to_blender(nx[normal_index], ny[normal_index], nz[normal_index], 1.0)
-        lengths = np.linalg.norm(normals, axis=1)
-        bad = lengths < 1e-8
-        normals[bad] = (0.0, 0.0, 1.0)
-        lengths[bad] = 1.0
-        normals /= lengths[:, None]
-        if len(mesh.loops) == len(normals):
-            mesh.normals_split_custom_set(normals.tolist())
-    except Exception as error:  # noqa: BLE001
-        result.warnings.append(f"{object_name}: custom normals skipped ({type(error).__name__}: {error})")
-
     obj = bpy.data.objects.new(object_name, mesh)
     collection.objects.link(obj)
+
+    # Automatically remove/clear custom split normals upon import
+    organization.remove_custom_normals(obj)
 
     # exactly one material slot per mesh; the material is a plain, empty datablock
     material = bpy.data.materials.get(f"{options.prefix}_{kind}") or bpy.data.materials.new(f"{options.prefix}_{kind}")
@@ -234,6 +220,12 @@ def _create_mesh(
     obj['mm_dna_mesh_index'] = int(mesh_index)
     obj['mm_dna_vertex_indices'] = vertex_indices
 
+    if hasattr(obj, 'add_rest_position_attribute'):
+        try:
+            obj.add_rest_position_attribute = True
+        except Exception:
+            pass
+
     return obj
 
 
@@ -252,6 +244,12 @@ def import_head(reader, options: ImportOptions, progress=None) -> ImportResult:
     result.rig = _create_rig(reader, options, rig_collection)
     result.rig["mm_character_collection"] = collection.name
     result.rig["mm_mesh_scope"] = True
+
+    try:
+        from . import head_shapes
+        head_shapes.apply_head_rig_shapes(result.rig)
+    except Exception as exc:
+        logger.warning("Could not apply head rig custom shapes: %s", exc)
 
     lod_meshes = list(reader.getMeshIndicesForLOD(options.lod))
     if not lod_meshes:

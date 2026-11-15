@@ -4,6 +4,29 @@
 
 Release notes describe each version at the time it was developed. For current setup instructions, use the README.
 
+## 2.80 — Character Assembly, Grooms, HDRI Lighting, OG Face Rig Shapes & 90mm Face Camera
+
+- **Character Assembly Workflow**:
+  - One-click character assembly in the new **Assemble Character** panel via **Import Character**, selecting `CharacterAssemblyManifest.json`.
+  - Automatically imports & sets up `head.dna`, `body.dna`, builds the 565-bone body control rig, merges/connects head and body skeletons into a unified character armature, applies texture maps and materials, imports and aligns hair curve grooms, imports clothing if present, and positions a 90mm camera in front of the face.
+  - Safely ignores unimported meshes (e.g. `EyeShell`, `cartilage`) and unrelated textures without errors.
+- **Grooms Setup & Surface Sticking (Case A & Case B)**:
+  - Case A: Dedicated **Grooms Setup** panel with **Select Head Mesh**, **Select Head UV's**, and **Import and Setup Grooms** button.
+  - Case B: Full automatic groom import and setup during one-click Character Assembly.
+  - Enables `add_rest_position_attribute = True` on the head mesh in vertex properties under the shape key tab for dynamic surface evaluation.
+  - Appends and wires the `Stick To Surface` Geometry Nodes modifier and `Groom Shader` Principled Hair BSDF from bundled `Groom Acc.blend`.
+  - Respects manifest hair color parameters (`melanin`, `redness`, `roughness`, `color`).
+  - **IMP_02**: Automatically removes the eyelash haircard mesh upon groom import and replaces it with the curves groom, preserving face board controls.
+- **New Shapes & Tri-Color Theme for OG Face Rig**:
+  - Automatically assigns 870 custom bone widget shapes from `New_Shapes_OG_Face_Rig.blend` at 0.05 uniform scale.
+  - Automatically sets custom bone wire colors: Left side (Blue `[0.298, 0.424, 1.0]`), Right side (Red `[1.0, 0.090, 0.047]`), Center/Spine (Yellow `[0.957, 0.788, 0.047]`).
+- **Scene Settings & HDRI Environment Lighting**:
+  - Renamed `Customisation` panel to **Scene Settings**.
+  - Added a collapsible **Lighting** dropdown panel above Face Board Color Settings with a visual thumbnail selector (`template_icon_view`) showcasing the active HDRI and built-in options (`HDRI_4K`, `studio_kontrast_01_4k`, `studio_kontrast_04_4k`, `studio_small_09_4k`).
+  - Added side-by-side **Import HDRI** and **Clear HDRI** buttons with icons, plus a real-time **Intensity** slider.
+- **Automatic 90mm Face Camera**:
+  - Automatically creates and aligns `Camera_Face` with 90mm focal length (`lens = 90.0`) positioned 0.75m directly in front of the MetaHuman's face on every import (`head.dna`, `body.dna`, or `CharacterAssemblyManifest.json`).
+
 ## 1.8.1 — Import overlay and interface polish
 
 - Add a centered viewport overlay during DNA import, with animated color ribbons,

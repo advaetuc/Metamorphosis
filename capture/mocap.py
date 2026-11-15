@@ -582,7 +582,8 @@ def unregister():
     cancel_video()
     if _before_load in bpy.app.handlers.load_pre:
         bpy.app.handlers.load_pre.remove(_before_load)
-    del bpy.types.Scene.mm_capture
+    if hasattr(bpy.types.Scene, 'mm_capture'):
+        del bpy.types.Scene.mm_capture
 
 
 CLASSES = (MM_CaptureSettings, MM_OT_live_start, MM_OT_live_stop, MM_OT_record_start,

@@ -13,16 +13,22 @@ def driver_owners():
             if pool=='materials' and owner.node_tree:yield owner.node_tree
 
 
-def retarget(old,new,board=None,board_names=()):
-    paths=tuple('pose.bones['+json.dumps(n)+']' for n in board_names)
+def retarget(old, new, board=None, board_names=()):
+    board_set = set(board_names)
     for owner in driver_owners():
-        if not owner.animation_data:continue
+        if not owner.animation_data:
+            continue
         for curve in owner.animation_data.drivers:
             for var in curve.driver.variables:
                 for target in var.targets:
-                    if target.id==old:
-                        is_board=target.bone_target in board_names or target.data_path.startswith(paths)
-                        target.id=board if board is not None and is_board else new
+                    if target.id == old:
+                        is_board = target.bone_target in board_set
+                        if not is_board and target.data_path.startswith("pose.bones["):
+                            q = '"' if '"' in target.data_path else "'"
+                            parts = target.data_path.split(q)
+                            if len(parts) > 1:
+                                is_board = parts[1] in board_set
+                        target.id = board if board is not None and is_board else new
 
 
 def snapshot_drivers(obj):
@@ -53,138 +59,203 @@ def restore_drivers(obj,drivers):
         driver.expression=expression
 
 
-def merge(context,body,head):
-    if body==head or not body.get('mm_body_rig') or bake.RIG_KEY_DATA not in head:
+def merge(context, body, head, join_face_board=False):
+    if body == head or not body.get('mm_body_rig') or bake.RIG_KEY_DATA not in head:
         raise ValueError('Select one imported body rig and one imported head rig')
-    if body.get(bake.RIG_KEY_DATA):raise ValueError('This body already has an attached head')
-    if context.object and context.object.mode!='OBJECT':
+    if body.get(bake.RIG_KEY_DATA):
+        raise ValueError('This body already has an attached head')
+    if context.object and context.object.mode != 'OBJECT':
         bpy.ops.object.mode_set(mode='OBJECT')
-    sculpt.set_mode(body,'OBJECT')
-    sculpt.set_mode(head,'OBJECT')
-    for rig in (body,head):
-        if rig.library or rig.data.users!=1 or len(rig.users_scene)!=1:
+    sculpt.set_mode(body, 'OBJECT')
+    sculpt.set_mode(head, 'OBJECT')
+    for rig in (body, head):
+        if rig.library or rig.data.users != 1 or len(rig.users_scene) != 1:
             raise ValueError('Use local, single-user rigs before connecting the head and body')
         if rig.animation_data and (rig.animation_data.action or rig.animation_data.nla_tracks):
             raise ValueError('Connect the skeletons before creating animation takes')
         if rig.get('mm_sculpt_session') or rig.get('mm_expression_session'):
             raise ValueError('Finish the sculpt session before connecting skeletons')
-    if abs(float(head.get(bake.RIG_KEY_SCALE,.01))-float(body['mm_body_scale']))>1e-8:
+    if abs(float(head.get(bake.RIG_KEY_SCALE, .01)) - float(body['mm_body_scale'])) > 1e-8:
         raise ValueError('Head and body import scales must match')
     if 'mm_body_control_map' not in body or 'PROPERTIES' not in body.pose.bones:
         raise ValueError('Build Control Rig before connecting the head and body')
-    identity=Matrix.Identity(4)
-    controls=json.loads(body['mm_body_control_map']).values()
-    if any(max(abs(a-b) for ra,rb in zip(body.pose.bones[n].matrix_basis,identity) for a,b in zip(ra,rb))>1e-5 for n in controls):
+    identity = Matrix.Identity(4)
+    controls = json.loads(body['mm_body_control_map']).values()
+    if any(max(abs(a - b) for ra, rb in zip(body.pose.bones[n].matrix_basis, identity) for a, b in zip(ra, rb)) > 1e-5 for n in controls):
         raise ValueError('Reset the body controls to their rest pose before connecting')
-    if any(float(v)>0 for k,v in body.pose.bones['PROPERTIES'].items() if '_FK_IK.' in k):
+    if any(float(v) > 0 for k, v in body.pose.bones['PROPERTIES'].items() if '_FK_IK.' in k):
         raise ValueError('Switch the body limbs to FK before connecting')
-    board_names=set(filter(None,str(head.get(bake.RIG_KEY_BOARD,'')).split('\n')))
-    board=bpy.data.objects.get(str(head.get(bake.RIG_KEY_BOARD_OBJECT,''))) or head
+    board_names = set(filter(None, str(head.get(bake.RIG_KEY_BOARD, '')).split('\n')))
+    board = bpy.data.objects.get(str(head.get(bake.RIG_KEY_BOARD_OBJECT, ''))) or head
     if not board_names or 'head' not in body.data.bones or 'head' not in head.data.bones:
         raise ValueError('The DNA head, body head bone and face-board metadata are required')
-    collisions=set(body.data.bones.keys())&set(head.data.bones.keys())-board_names
-    renames={name:'BODY_BIND_'+name for name in collisions}
+    collisions = set(body.data.bones.keys()) & set(head.data.bones.keys()) - board_names
+    renames = {name: 'BODY_BIND_' + name for name in collisions}
     if any(n in head.data.bones or n in body.data.bones for n in renames.values()):
         raise ValueError('Reserved body attachment bone names already exist')
-    meshes=[o for o in context.scene.objects if o.type=='MESH' and any(m.type=='ARMATURE' and m.object==body for m in o.modifiers)]
+    meshes = [o for o in context.scene.objects if o.type == 'MESH' and any(m.type == 'ARMATURE' and m.object == body for m in o.modifiers)]
     # Keep the head's source names intact for face rebuilding and DNA sculpting.
     # Namespaced body bind bones retain their original rest matrices and weights.
-    for old,new in renames.items():
-        body.data.bones[old].name=new
+    for old, new in renames.items():
+        body.data.bones[old].name = new
         for mesh in meshes:
-            if old in mesh.vertex_groups:mesh.vertex_groups[old].name=new
-    body['mm_body_joint_map']=json.dumps(renames)
-    if board==head:
-        previous=set(bpy.data.objects)
-        for obj in list(context.view_layer.objects.selected):
-            obj.select_set(False)
-        context.view_layer.objects.active=head
-        head.select_set(True)
-        with sculpt.object_context(head):
-            sculpt.set_mode(head,'EDIT')
-            for bone in head.data.edit_bones:
-                bone.select=bone.select_head=bone.select_tail=bone.name in board_names
-            bpy.ops.armature.separate()
-            sculpt.set_mode(head,'OBJECT')
-        new_armatures=[o for o in set(bpy.data.objects)-previous if o.type=='ARMATURE']
-        board=next((o for o in new_armatures if any(b.name in board_names for b in o.data.bones)),None)
-        if board is None:
-            board=next(iter(new_armatures))
-        board.name=head.name+'_FACE_BOARD'
-        if board.animation_data:
-            for curve in list(board.animation_data.drivers):
-                if not any(curve.data_path.startswith('pose.bones['+json.dumps(n)+']') for n in board_names):
-                    board.animation_data.drivers.remove(curve)
-        for key in list(board.keys()):
-            if key.startswith('mm_') and key!='mm_import_id':del board[key]
-        retarget(head,head,board,board_names)
-    metadata={k:head[k] for k in head.keys() if k.startswith('mm_') and k not in {'mm_import_id','mm_character_collection'}}
-    children=[(o,o.matrix_world.copy()) for o in context.scene.objects if o.parent==head]
-    retarget(head,body,board,board_names)
-    # Armature joining keeps the active object's animation data. Explicitly
-    # transfer facial drivers before the source ID is removed.
-    facial_drivers=snapshot_drivers(head)
+            if old in mesh.vertex_groups:
+                mesh.vertex_groups[old].name = new
+    body['mm_body_joint_map'] = json.dumps(renames)
+
+    if not join_face_board:
+        if board == head:
+            previous = set(bpy.data.objects)
+            for obj in list(context.view_layer.objects.selected):
+                obj.select_set(False)
+            context.view_layer.objects.active = head
+            head.select_set(True)
+            with sculpt.object_context(head):
+                sculpt.set_mode(head, 'EDIT')
+                for bone in head.data.edit_bones:
+                    bone.select = bone.select_head = bone.select_tail = bone.name in board_names
+                with context.temp_override(
+                    active_object=head,
+                    object=head,
+                    selected_objects=[head],
+                    selected_editable_objects=[head],
+                ):
+                    bpy.ops.armature.separate()
+                sculpt.set_mode(head, 'OBJECT')
+            new_armatures = [o for o in set(bpy.data.objects) - previous if o.type == 'ARMATURE']
+            board = next((o for o in new_armatures if any(b.name in board_names for b in o.data.bones)), None)
+            if board is None:
+                board = next(iter(new_armatures))
+            board.name = head.name + '_FACE_BOARD'
+            if board.animation_data:
+                for curve in list(board.animation_data.drivers):
+                    if not any(curve.data_path.startswith('pose.bones[' + json.dumps(n) + ']') for n in board_names):
+                        board.animation_data.drivers.remove(curve)
+            for key in list(board.keys()):
+                if key.startswith('mm_') and key != 'mm_import_id':
+                    del board[key]
+            retarget(head, head, board, board_names)
+    else:
+        # User wants face board joined into character rig
+        if board != head:
+            facial_board_drivers = snapshot_drivers(board)
+            retarget(board, head, head, board_names)
+            with context.temp_override(
+                active_object=head,
+                object=head,
+                selected_objects=[head, board],
+                selected_editable_objects=[head, board],
+            ):
+                bpy.ops.object.join()
+            restore_drivers(head, facial_board_drivers)
+        board = body
+
+    target_board = body if join_face_board else board
+    metadata = {k: head[k] for k in head.keys() if k.startswith('mm_') and k not in {'mm_import_id', 'mm_character_collection'}}
+    head_import_id = head.get('mm_import_id')
+    children = [(o, o.matrix_world.copy()) for o in context.scene.objects if o.parent == head]
+    retarget(head, body, target_board, board_names)
+    facial_drivers = snapshot_drivers(head)
     for obj in context.scene.objects:
         for modifier in obj.modifiers:
-            if modifier.type=='ARMATURE' and modifier.object==head:modifier.object=body
-        constraints=list(obj.constraints)
-        if obj.type=='ARMATURE':constraints.extend(c for bone in obj.pose.bones for c in bone.constraints)
+            if modifier.type == 'ARMATURE' and modifier.object == head:
+                modifier.object = body
+        constraints = list(obj.constraints)
+        if obj.type == 'ARMATURE':
+            constraints.extend(c for bone in obj.pose.bones for c in bone.constraints)
         for constraint in constraints:
-            if getattr(constraint,'target',None)==head:
-                constraint.target=board if getattr(constraint,'subtarget','') in board_names else body
-    for obj in context.view_layer.objects.selected:obj.select_set(False)
-    body.select_set(True);head.select_set(True);context.view_layer.objects.active=body
-    bpy.ops.object.join()
-    restore_drivers(body,facial_drivers)
-    for child,world in children:
-        is_board=child.parent_bone in board_names or (child.get('mm_import_id')==board.get('mm_import_id') and not child.get('mm_head_mesh'))
-        child.parent=board if is_board else body
-        child.matrix_world=world
+            if getattr(constraint, 'target', None) == head:
+                constraint.target = target_board if getattr(constraint, 'subtarget', '') in board_names else body
+    for obj in context.view_layer.objects.selected:
+        obj.select_set(False)
+    body.select_set(True)
+    head.select_set(True)
+    context.view_layer.objects.active = body
+    with context.temp_override(
+        active_object=body,
+        object=body,
+        selected_objects=[body, head],
+        selected_editable_objects=[body, head],
+    ):
+        bpy.ops.object.join()
+    restore_drivers(body, facial_drivers)
+    for child, world in children:
+        is_board = child.parent_bone in board_names or (child.get('mm_import_id') == head_import_id and not child.get('mm_head_mesh'))
+        child.parent = target_board if (is_board and not join_face_board) else body
+        child.matrix_world = world
     with sculpt.object_context(body):
-        sculpt.set_mode(body,'EDIT')
+        sculpt.set_mode(body, 'EDIT')
         for b in body.data.edit_bones:
-            b.select=b.select_head=b.select_tail=False
-        for name,parent in renames.items():
-            bone=body.data.edit_bones[name]
-            bone.use_connect=False;bone.parent=body.data.edit_bones[parent]
-        sculpt.set_mode(body,'OBJECT')
-    for key,value in metadata.items():body[key]=value
-    body[bake.RIG_KEY_BOARD_OBJECT]=board.name
-    body['mm_attached_head']=True
-    for c in list(body.data.collections_all):
-        if not len(c.bones):
-            body.data.collections.remove(c)
-        elif c.name in ('MCH','ORG','DEF','DEF_COR','DEF_HEAD','DEF_BODY','DEF_MH_COR','CONTROLS'):
-            c.is_visible=False
-    world=board.matrix_world.copy()
-    board.parent=None;board.matrix_world=world
-    constraint=board.constraints.new('CHILD_OF');constraint.name='Follow MetaHuman Head'
-    constraint.target=body;constraint.subtarget='head'
-    context.view_layer.update()
-    constraint.inverse_matrix=(body.matrix_world@body.pose.bones['head'].matrix).inverted()
-    context.view_layer.update()
+            b.select = b.select_head = b.select_tail = False
+        for name, parent in renames.items():
+            if name in body.data.edit_bones and parent in body.data.edit_bones:
+                bone = body.data.edit_bones[name]
+                bone.use_connect = False
+                bone.parent = body.data.edit_bones[parent]
+        sculpt.set_mode(body, 'OBJECT')
+    for key, value in metadata.items():
+        body[key] = value
+    body['mm_attached_head'] = True
+
+    if not join_face_board and board != body:
+        body[bake.RIG_KEY_BOARD_OBJECT] = board.name
+        for c in list(body.data.collections_all):
+            if not len(c.bones):
+                body.data.collections.remove(c)
+            elif c.name in ('MCH', 'ORG', 'DEF', 'DEF_COR', 'DEF_HEAD', 'DEF_BODY', 'DEF_MH_COR', 'CONTROLS'):
+                c.is_visible = False
+        world = board.matrix_world.copy()
+        board.parent = None
+        board.matrix_world = world
+        constraint = board.constraints.new('CHILD_OF')
+        constraint.name = 'Follow MetaHuman Head'
+        constraint.target = body
+        constraint.subtarget = 'head'
+        context.view_layer.update()
+        constraint.inverse_matrix = (body.matrix_world @ body.pose.bones['head'].matrix).inverted()
+        context.view_layer.update()
+        ret_board = board
+    else:
+        body[bake.RIG_KEY_BOARD_OBJECT] = body.name
+        for c in list(body.data.collections_all):
+            if not len(c.bones):
+                body.data.collections.remove(c)
+            elif c.name in ('MCH', 'ORG', 'DEF', 'DEF_COR', 'DEF_HEAD', 'DEF_BODY', 'DEF_MH_COR', 'CONTROLS'):
+                c.is_visible = False
+        context.view_layer.update()
+        ret_board = None
+
     for obj in list(context.view_layer.objects.selected):
         obj.select_set(False)
     body.select_set(True)
-    context.view_layer.objects.active=body
-    return body,board
+    context.view_layer.objects.active = body
+    return body, ret_board
 
 
 class MM_OT_connect_body(bpy.types.Operator):
-    bl_idname='metamorphosis.connect_body'
-    bl_label='Connect Head and Body'
-    bl_description='Select an imported head and body; join skeletons and keep the face board separate'
-    bl_options={'REGISTER','UNDO'}
+    bl_idname = 'metamorphosis.connect_body'
+    bl_label = 'Connect Head and Body'
+    bl_description = 'Select an imported head and body; join skeletons and optionally join or keep the face board separate'
+    bl_options = {'REGISTER', 'UNDO'}
 
-    def execute(self,context):
-        bodies=[o for o in context.selected_objects if o.type=='ARMATURE' and o.get('mm_body_rig')]
-        heads=[o for o in context.selected_objects if o.type=='ARMATURE' and bake.RIG_KEY_DATA in o and not o.get('mm_body_rig')]
-        if len(bodies)!=1 or len(heads)!=1:
-            self.report({'ERROR'},'Select one MetaMorphosis head rig and one body rig');return {'CANCELLED'}
-        try:merge(context,bodies[0],heads[0])
-        except (ValueError,RuntimeError) as exc:
-            self.report({'ERROR'},str(exc));return {'CANCELLED'}
-        self.report({'INFO'},'Connected skeletons; the separate face board follows the head')
+    join_face_board: bpy.props.BoolProperty(
+        name="Join Face Board",
+        default=False,
+        description="Join face board armature into character rig instead of keeping it separate",
+    )
+
+    def execute(self, context):
+        bodies = [o for o in context.selected_objects if o.type == 'ARMATURE' and o.get('mm_body_rig')]
+        heads = [o for o in context.selected_objects if o.type == 'ARMATURE' and bake.RIG_KEY_DATA in o and not o.get('mm_body_rig')]
+        if len(bodies) != 1 or len(heads) != 1:
+            self.report({'ERROR'}, 'Select one MetaMorphosis head rig and one body rig')
+            return {'CANCELLED'}
+        try:
+            merge(context, bodies[0], heads[0], join_face_board=self.join_face_board)
+        except (ValueError, RuntimeError) as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        self.report({'INFO'}, 'Connected skeletons; ' + ('face board joined into rig' if self.join_face_board else 'separate face board follows the head'))
         return {'FINISHED'}
 
 

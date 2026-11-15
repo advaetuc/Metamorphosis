@@ -10,7 +10,7 @@ from ..capture import mocap
 from .constants import LABEL
 from . import materials
 
-_previews=None
+_previews = None
 
 
 def icon(name):
@@ -28,72 +28,184 @@ class MM_PT_panel(bpy.types.Panel):
         self.layout.label(text="", icon_value=icon('dna'))
 
     def draw_header_preset(self, context):
-        self.layout.label(text="by TheClayMan3D")
+        self.layout.label(text="v2.80 PRO")
 
     def draw(self, context):
         layout = self.layout
         layout.use_property_split = True
         layout.use_property_decorate = False
 
+        # ---------------------------------------------------------------------
+        # Studio Brand Header
+        # ---------------------------------------------------------------------
+        brand_card = layout.box()
+        brand_row = brand_card.row(align=True)
         if icon('brand'):
-            row=layout.row();row.alignment='CENTER'
-            row.template_icon(icon_value=icon('brand'),scale=5)
+            brand_row.template_icon(icon_value=icon('brand'), scale=4.2)
+        col = brand_row.column(align=True)
+        col.alignment = 'LEFT'
+        title_row = col.row(align=True)
+        title_row.label(text="METAMORPHOSIS")
+        sub_row = col.row(align=True)
+        sub_row.scale_y = 0.85
+        sub_row.label(text="MetaHuman DNA & Rig Pipeline")
+        badge_row = col.row(align=True)
+        badge_row.scale_y = 0.85
+        badge_row.label(text="v2.80 PRO · Blender 5.2", icon='CHECKMARK')
 
+        # ---------------------------------------------------------------------
+        # Assemble Character Card (Hero Section)
+        # ---------------------------------------------------------------------
         box = layout.box()
-        box.label(text="Character Setup", icon='IMPORT')
-        box.prop(context.scene, 'mm_texture_folder', text="Texture Source")
+        hdr = box.row(align=True)
+        hdr.label(text="Assemble Character", icon='COMMUNITY')
+        tag = hdr.row(align=True)
+        tag.alignment = 'RIGHT'
+        tag.label(text="ONE-CLICK")
+
+        # Control Shapes Segmented Switch
+        col = box.column(align=True)
+        col.label(text="Rig Control Shapes:", icon='SHAPEKEY_DATA')
+        seg_row = col.row(align=True)
+        seg_row.scale_y = 1.2
+        seg_row.prop(context.scene, "mm_assemble_custom_shapes", expand=True)
+
+        # Join Face Board Toggle Button
+        box.separator(factor=0.3)
+        tgl_row = box.row(align=True)
+        tgl_row.scale_y = 1.15
+        is_joined = getattr(context.scene, "mm_assemble_join_face_board", False)
+        tgl_row.prop(
+            context.scene,
+            "mm_assemble_join_face_board",
+            text="Join Face Board Armature",
+            toggle=True,
+            icon='CHECKBOX_HLT' if is_joined else 'CHECKBOX_DEHLT',
+        )
+
+        # Hero Action Button
+        box.separator(factor=0.4)
+        hero = box.row(align=True)
+        hero.scale_y = 1.6
+        op = hero.operator("metamorphosis.import_character", text="Assemble MetaHuman Character", icon="IMPORT")
+        op.body_custom_shapes = getattr(context.scene, "mm_assemble_custom_shapes", "UNREAL")
+        op.join_face_board = getattr(context.scene, "mm_assemble_join_face_board", False)
+
+        hint = box.row(align=True)
+        hint.scale_y = 0.85
+        hint.label(text="Body DNA · 565-Bone Rig · Head RigLogic · Grooms · Shaders", icon='INFO')
+
+        # ---------------------------------------------------------------------
+        # Character Pipeline Setup Card
+        # ---------------------------------------------------------------------
+        box = layout.box()
+        hdr = box.row(align=True)
+        hdr.label(text="Character Pipeline Setup", icon='PREFERENCES')
+        box.prop(context.scene, 'mm_texture_folder', text="Textures", icon='FILE_IMAGE')
+
         head_rig, body_rig = materials.find_character_rigs(context)
         if head_rig or body_rig:
-            box.operator('metamorphosis.setup_materials', text="Apply Materials", icon='MATERIAL')
-        row = layout.row(align=True)
-        row.scale_y = 1.35
-        row.operator("metamorphosis.import_dna", text="Import DNA", icon="FILE_FOLDER")
-        row.operator("metamorphosis.remove_all", text="Remove", icon="TRASH")
+            mat_row = box.row(align=True)
+            mat_row.scale_y = 1.25
+            mat_row.operator('metamorphosis.setup_materials', text="Apply Shaders & Materials", icon='MATERIAL')
 
+        row = box.row(align=True)
+        row.scale_y = 1.3
+        row.operator("metamorphosis.import_dna", text="Import Head DNA", icon="FILE_FOLDER")
+        row.operator("metamorphosis.remove_all", text="Remove All", icon="TRASH")
+
+        # ---------------------------------------------------------------------
+        # Active Character Dashboard (Live HUD)
+        # ---------------------------------------------------------------------
         rig = head_rig or body_rig
         if rig is None:
-            box = layout.box()
-            box.label(text="Ready for your character", icon="INFO")
-            box.label(text="Import a MetaHuman DNA file to begin.")
+            empty_card = layout.box()
+            ehdr = empty_card.row(align=True)
+            ehdr.label(text="Character Status", icon="INFO")
+            tag = ehdr.row(align=True)
+            tag.alignment = 'RIGHT'
+            tag.label(text="STANDBY")
+
+            ecol = empty_card.column(align=True)
+            ecol.scale_y = 0.9
+            ecol.label(text="Ready for Character Import.", icon="FORWARD")
+            ecol.label(text="Select Manifest or DNA above to assemble.", icon="BLANK1")
             return
-        box = layout.box()
-        box.label(text="Active Character", icon="ARMATURE_DATA")
-        box.label(text=rig.name, icon="OUTLINER_OB_ARMATURE")
+
+        dash = layout.box()
+        dhdr = dash.row(align=True)
+        dhdr.label(text="Active Character Dashboard", icon="ARMATURE_DATA")
+        tag = dhdr.row(align=True)
+        tag.alignment = 'RIGHT'
+        tag.label(text="ACTIVE", icon="RADIOBUT_ON")
+
+        info = dash.column(align=True)
+        info.label(text=f"  {rig.name}", icon="OUTLINER_OB_ARMATURE")
         if bake.RIG_KEY_DATA in rig:
-            box.label(text=f"{rig.get('mm_quality', 'LITE').title()} rig · Native drivers", icon="DRIVER")
+            info.label(text=f"  {rig.get('mm_quality', 'LITE').title()} Rig · Native RigLogic Drivers", icon="DRIVER")
         elif rig.get('mm_body_rig'):
-            box.label(text="Body rig · Native correctives", icon="DRIVER")
+            info.label(text="  Body Rig · Native RBF Correctives", icon="DRIVER")
         if rig.get("mm_stats"):
             for part in str(rig["mm_stats"]).split(", "):
-                box.label(text=part, icon="DOT")
+                info.label(text=f"  {part}", icon="DOT")
+
         if bake.RIG_KEY_DATA in rig:
-            layout.separator()
-            box = layout.box()
-            box.label(text="Rig Controls", icon="POSE_HLT")
-            row = box.row(align=True)
-            op = row.operator("metamorphosis.toggle_rig", text="Enable", icon="PLAY")
-            op.enable = True
-            op = row.operator("metamorphosis.toggle_rig", text="Disable", icon="PAUSE")
-            op.enable = False
-            box.operator("metamorphosis.rebuild", text="Rebuild Drivers", icon="FILE_REFRESH")
+            dash.separator(factor=0.5)
+            ctrl_hdr = dash.row(align=True)
+            ctrl_hdr.label(text="Facial RigLogic Drivers", icon="POSE_HLT")
+
+            deck = dash.row(align=True)
+            deck.scale_y = 1.3
+            op1 = deck.operator("metamorphosis.toggle_rig", text="Enable Drivers", icon="PLAY")
+            op1.enable = True
+            op2 = deck.operator("metamorphosis.toggle_rig", text="Pause Drivers", icon="PAUSE")
+            op2.enable = False
+
+            rebuild_row = dash.row(align=True)
+            rebuild_row.scale_y = 1.2
+            rebuild_row.operator("metamorphosis.rebuild", text="Rebuild Native Drivers", icon="FILE_REFRESH")
 
 
-class MM_PT_customization(bpy.types.Panel):
-    bl_label = "Customization"
-    bl_idname = "MM_PT_customization"
+class MM_PT_scene_settings(bpy.types.Panel):
+    bl_label = "Scene Settings"
+    bl_idname = "MM_PT_scene_settings"
     bl_parent_id = "MM_PT_panel"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = LABEL
     bl_options = {"DEFAULT_CLOSED"}
 
+    def draw_header(self, context):
+        self.layout.label(text="", icon="PREFERENCES")
+
+    def draw(self, context):
+        pass
+
+
+class MM_PT_face_board_color(bpy.types.Panel):
+    bl_label = "Face Board Color Settings"
+    bl_idname = "MM_PT_face_board_color"
+    bl_parent_id = "MM_PT_scene_settings"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = LABEL
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw_header(self, context):
+        self.layout.label(text="", icon="COLORSET_01_VEC")
+
     def draw(self, context):
         layout = self.layout
         layout.use_property_split = True
         layout.use_property_decorate = False
-        layout.label(text="Match the control board to your workspace.", icon="INFO")
-        layout.prop(context.scene, "mm_face_board_color", text="Control Colour")
-        layout.operator("metamorphosis.apply_face_board_color", icon="COLORSET_01_VEC")
+
+        box = layout.box()
+        hdr = box.row(align=True)
+        hdr.label(text="Face Board Control Colour", icon="COLORSET_01_VEC")
+        box.prop(context.scene, "mm_face_board_color", text="Control Colour")
+        btn = box.row(align=True)
+        btn.scale_y = 1.25
+        btn.operator("metamorphosis.apply_face_board_color", text="Apply Colour to Controls", icon="CHECKMARK")
 
 
 class MM_PT_diagnostics(bpy.types.Panel):
@@ -112,13 +224,22 @@ class MM_PT_diagnostics(bpy.types.Panel):
         layout = self.layout
         layout.use_property_split = True
         layout.use_property_decorate = False
-        col = layout.column(align=True)
+
+        box = layout.box()
+        hdr = box.row(align=True)
+        hdr.label(text="Driver Verification & Benchmarking", icon="TOOL_SETTINGS")
+
+        col = box.column(align=True)
         col.enabled = bake.find_baked_rig(context) is not None
-        col.operator("metamorphosis.validate", text="Check Drivers", icon="CHECKMARK")
-        col.operator("metamorphosis.benchmark", text="Measure Speed", icon="TIME")
+        row = col.row(align=True)
+        row.scale_y = 1.25
+        row.operator("metamorphosis.validate", text="Check Drivers", icon="CHECKMARK")
+        row.operator("metamorphosis.benchmark", text="Measure Speed", icon="TIME")
+
         if bpy.data.texts.get("MetaMorphosis Report"):
-            layout.separator()
-            layout.label(text="Text Editor → MetaMorphosis Report", icon="TEXT")
+            box.separator(factor=0.4)
+            rep = box.row(align=True)
+            rep.label(text="Report available: Text Editor → MetaMorphosis Report", icon="TEXT")
 
 
 class MM_PT_live_link(bpy.types.Panel):
@@ -135,10 +256,21 @@ class MM_PT_live_link(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+
         settings = context.scene.mm_capture
         live = mocap._live
         recording = bool(live and live['recording'])
-        col = layout.column()
+
+        box = layout.box()
+        hdr = box.row(align=True)
+        hdr.label(text="Live Stream Setup", icon='RADIOBUT_ON' if live else 'RADIOBUT_OFF')
+        tag = hdr.row(align=True)
+        tag.alignment = 'RIGHT'
+        tag.label(text="LIVE" if live else "OFFLINE")
+
+        col = box.column(align=True)
         col.enabled = not live and not mocap._job
         col.prop(settings, 'target')
         col.prop(settings, 'mode')
@@ -149,16 +281,29 @@ class MM_PT_live_link(bpy.types.Panel):
         col.prop(settings, 'host')
         col.prop(settings, 'port')
         col.prop(settings, 'subject')
-        info = layout.box()
+
+        info = box.box()
         info.label(text="Live Link Face · " + ('MetaHuman Animator' if settings.mode == 'MHA' else 'ARKit'), icon='INFO')
         info.label(text="Enable Realtime Animation on iPhone." if settings.mode == 'MHA'
                    else "Send the phone stream to this computer.")
-        layout.operator('metamorphosis.live_stop' if live else 'metamorphosis.live_start',
-                        icon='PAUSE' if live else 'PLAY')
-        layout.label(text=settings.status)
+
+        btn = box.row(align=True)
+        btn.scale_y = 1.35
+        btn.operator('metamorphosis.live_stop' if live else 'metamorphosis.live_start',
+                     text='Stop Live Link' if live else 'Start Live Link Stream',
+                     icon='PAUSE' if live else 'PLAY')
+
+        stat_row = box.row(align=True)
+        stat_row.label(text=settings.status, icon='DOT')
         if settings.last_take:
-            layout.label(text=f"Last take: {settings.last_take}", icon='ACTION')
-        col = layout.column()
+            stat_row.label(text=f"Last take: {settings.last_take}", icon='ACTION')
+
+        # Recording Section
+        rec_box = layout.box()
+        rec_hdr = rec_box.row(align=True)
+        rec_hdr.label(text="Performance Recording Deck", icon='REC')
+
+        col = rec_box.column(align=True)
         col.enabled = not recording
         if settings.mode == 'ARKIT':
             col.prop(settings, 'mirror')
@@ -170,11 +315,13 @@ class MM_PT_live_link(bpy.types.Panel):
             col.prop(settings, 'extreme')
         col.prop(settings, 'take_name')
         col.prop(settings, 'end_mode')
-        row = layout.row(align=True)
-        row.enabled = bool(live)
-        row.operator('metamorphosis.record_stop' if recording else 'metamorphosis.record_start',
-                     icon='PAUSE' if recording else 'REC')
-        layout.label(text="New take · starts at the current frame")
+
+        rec_btn = rec_box.row(align=True)
+        rec_btn.scale_y = 1.35
+        rec_btn.enabled = bool(live)
+        rec_btn.operator('metamorphosis.record_stop' if recording else 'metamorphosis.record_start',
+                         text='Stop Recording Take' if recording else 'Record Take',
+                         icon='PAUSE' if recording else 'REC')
 
 
 class MM_PT_video(bpy.types.Panel):
@@ -191,8 +338,16 @@ class MM_PT_video(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+
         settings = context.scene.mm_capture
-        col = layout.column()
+
+        box = layout.box()
+        hdr = box.row(align=True)
+        hdr.label(text="Video Facial Tracking", icon='SEQUENCE')
+
+        col = box.column(align=True)
         col.enabled = not mocap._job and not mocap._live
         col.prop(settings, 'target')
         col.prop(settings, 'video')
@@ -203,23 +358,32 @@ class MM_PT_video(bpy.types.Panel):
         col.prop(settings, 'brow_gain')
         col.prop(settings, 'smoothing')
         col.prop(settings, 'extreme')
-        col.operator('metamorphosis.video_process', icon='ACTION')
+
+        p_row = box.row(align=True)
+        p_row.scale_y = 1.35
+        p_row.operator('metamorphosis.video_process', text='Process Video Mocap', icon='ACTION')
         if mocap._job:
-            layout.operator('metamorphosis.video_cancel', icon='CANCEL')
-        layout.label(text=settings.video_status)
-        box = layout.box()
-        box.label(text="Video Tools", icon='PREFERENCES')
-        box.label(text="One-time local setup", icon='INFO')
+            c_row = box.row(align=True)
+            c_row.scale_y = 1.2
+            c_row.operator('metamorphosis.video_cancel', text='Cancel Video Job', icon='CANCEL')
+
+        box.label(text=settings.video_status, icon='INFO')
+
+        t_box = layout.box()
+        thdr = t_box.row(align=True)
+        thdr.label(text="Local Video AI Tools", icon='PREFERENCES')
         if mocap.video_ready(mocap.video_folder(settings)):
-            box.label(text='Video tools installed',icon='CHECKMARK')
+            t_box.label(text='MediaPipe tools ready on this computer.', icon='CHECKMARK')
         else:
-            box.operator('metamorphosis.video_setup', icon='IMPORT')
-        box.prop(settings, 'video_advanced')
+            s_btn = t_box.row(align=True)
+            s_btn.scale_y = 1.25
+            s_btn.operator('metamorphosis.video_setup', text='Install Video AI Tools', icon='IMPORT')
+
+        t_box.prop(settings, 'video_advanced')
         if settings.video_advanced:
-            box.prop(settings, 'video_python')
-            box.prop(settings, 'video_folder')
-            box.operator('metamorphosis.video_setup',text='Repair Video Tools',icon='FILE_REFRESH').repair = True
-        layout.label(text="Videos are processed on this computer.")
+            t_box.prop(settings, 'video_python')
+            t_box.prop(settings, 'video_folder')
+            t_box.operator('metamorphosis.video_setup', text='Repair Video Tools', icon='FILE_REFRESH').repair = True
 
 
 class MM_OT_apply_face_board_color(bpy.types.Operator):
@@ -239,8 +403,8 @@ class MM_OT_apply_face_board_color(bpy.types.Operator):
             return {'CANCELLED'}
         rgb = tuple(context.scene.mm_face_board_color)
         normal = rgb
-        select = tuple(c+(1-c)*.4 for c in rgb)
-        active = tuple(c+(1-c)*.7 for c in rgb)
+        select = tuple(c + (1 - c) * .4 for c in rgb)
+        active = tuple(c + (1 - c) * .7 for c in rgb)
         changed = 0
         for bone in board.pose.bones:
             if not bone.name.startswith('CTRL_') or bone.color is None:
@@ -254,14 +418,21 @@ class MM_OT_apply_face_board_color(bpy.types.Operator):
         return {'FINISHED'}
 
 
-CLASSES = (MM_PT_panel, MM_PT_customization, MM_OT_apply_face_board_color, MM_PT_live_link, MM_PT_video, MM_PT_diagnostics)
+CLASSES = (
+    MM_PT_panel,
+    MM_PT_scene_settings,
+    MM_OT_apply_face_board_color,
+    MM_PT_live_link,
+    MM_PT_video,
+    MM_PT_diagnostics,
+)
 
 
 def register():
     global _previews
-    _previews=bpy.utils.previews.new()
-    for name in ('brand','dna','capture','body'):
-        _previews.load(name,str(Path(__file__).resolve().parents[1]/'assets'/'ui'/(name+'.png')),'IMAGE')
+    _previews = bpy.utils.previews.new()
+    for name in ('brand', 'dna', 'capture', 'body'):
+        _previews.load(name, str(Path(__file__).resolve().parents[1] / 'assets' / 'ui' / (name + '.png')), 'IMAGE')
     bpy.types.Scene.mm_face_board_color = FloatVectorProperty(
         name='Face Board Colour', subtype='COLOR', size=3,
         min=0.0, max=1.0, default=(0.956, 0.788, 0.047),
@@ -271,5 +442,8 @@ def register():
 
 def unregister():
     global _previews
-    if _previews is not None:bpy.utils.previews.remove(_previews);_previews=None
-    del bpy.types.Scene.mm_face_board_color
+    if _previews is not None:
+        bpy.utils.previews.remove(_previews)
+        _previews = None
+    if hasattr(bpy.types.Scene, 'mm_face_board_color'):
+        del bpy.types.Scene.mm_face_board_color

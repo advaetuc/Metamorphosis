@@ -7,8 +7,9 @@ from mathutils import Vector
 from bpy.props import StringProperty, FloatProperty, IntProperty, EnumProperty
 from bpy_extras.io_utils import ImportHelper
 
+from pathlib import Path
 from ..dna import importer, dnaio
-from ..core import cleanup
+from ..core import cleanup, organization, materials
 from ..riglogic import bakeplan
 from ..sculpting import sculpt
 from .body_rbf import BodyRBF
@@ -122,6 +123,7 @@ class MM_OT_import_body(bpy.types.Operator,ImportHelper):
                 raise ValueError('; '.join(imported.warnings))
             for mesh in imported.meshes:
                 mesh.pop('mm_head_mesh',None);mesh['mm_body_mesh']=True
+                organization.remove_custom_normals(mesh)
             build_correctives(reader,imported.rig,imported.collection,prefix,self.scale,self.lod)
             for c in list(imported.collection.children):
                 role=c.get('mm_collection_role')
@@ -132,7 +134,24 @@ class MM_OT_import_body(bpy.types.Operator,ImportHelper):
             imported.rig['mm_body_rig']=True
             imported.rig['mm_body_dna']=self.filepath
             imported.rig['mm_body_scale']=self.scale
+            # Auto-apply materials if Maps folder exists next to DNA, and guarantee Detail Tiling = 45
+            try:
+                dna_path = Path(self.filepath)
+                maps_candidates = [dna_path.parent / "Maps", dna_path.parent.parent / "Maps"]
+                maps_dir = next((d for d in maps_candidates if d.is_dir()), None)
+                if maps_dir:
+                    materials.setup_materials(context, str(maps_dir))
+                materials.set_body_detail_tiling(imported.meshes, 45.0)
+            except Exception:
+                materials.set_body_detail_tiling(imported.meshes, 45.0)
             cleanup.mark_created(before,token)
+            try:
+                for obj in list(context.scene.objects):
+                    if obj.type == "MESH":
+                        organization.remove_custom_normals(obj)
+                organization.close_all_collections(context)
+            except Exception:
+                pass
             self.report({'INFO'},'Imported original body DNA with native correctives; click Build Control Rig when ready')
             return {'FINISHED'}
         except Exception as exc:
@@ -227,15 +246,33 @@ class MM_PT_body(bpy.types.Panel):
 
     def draw(self,context):
         layout=self.layout
+
         settings=layout.box()
-        settings.label(text='Import Settings',icon='PREFERENCES')
-        settings.prop(context.scene,'mm_body_custom_shapes',text='Custom Shapes')
-        layout.operator('metamorphosis.import_body',icon='ARMATURE_DATA')
-        layout.operator('metamorphosis.convert_body',text='Build Control Rig',icon='MOD_ARMATURE')
-        layout.operator('metamorphosis.connect_body',icon='CONSTRAINT_BONE')
+        hdr = settings.row(align=True)
+        hdr.label(text='Body Rig Pipeline', icon='PREFERENCES')
+        tag = hdr.row(align=True)
+        tag.alignment = 'RIGHT'
+        tag.label(text='565-BONE RIG')
+
+        s_col = settings.column()
+        s_col.use_property_split = True
+        s_col.use_property_decorate = False
+        s_col.prop(context.scene,'mm_body_custom_shapes',text='Custom Shapes')
+
+        col = settings.column(align=True)
+        row1 = col.row(align=True)
+        row1.scale_y = 1.2
+        row1.operator('metamorphosis.import_body', text='Import Body DNA', icon='ARMATURE_DATA')
+        row1.operator('metamorphosis.convert_body', text='Build Control Rig', icon='MOD_ARMATURE')
+
+        row2 = col.row(align=True)
+        row2.scale_y = 1.2
+        row2.operator('metamorphosis.connect_body', text='Connect Head & Body', icon='CONSTRAINT_BONE')
+
         rig=active_body(context)
         if rig is None:
-            layout.label(text='Select a body rig to show its controls.')
+            empty = layout.box()
+            empty.label(text='Select an imported body rig to show its controls.', icon='INFO')
             return
         box=layout.box();box.label(text=rig.name,icon='ARMATURE_DATA')
         if not rig.get('mm_body_converter'):
@@ -259,14 +296,20 @@ class MM_PT_body(bpy.types.Panel):
             for key in ('HEAD_FOLLOW','NECK_FOLLOW'):
                 if key in props:box.prop(props,f'[{json.dumps(key)}]',text=key.replace('_',' ').title(),slider=True)
         if props and rig.get('mm_body_converter'):
-            pbox=layout.box();pbox.label(text='Follow and Parent Spaces')
+            pbox=layout.box()
+            pbox.use_property_split = True
+            pbox.use_property_decorate = False
+            pbox.label(text='Follow and Parent Spaces')
             for side in ('L','R'):
                 for key in ('ARM_ROT_FOLLOW','LEG_ROT_FOLLOW','ARM_IK_PARENTS','LEG_IK_PARENTS'):
                     name=key+'.'+side
                     if name in props:pbox.prop(props,f'[{json.dumps(name)}]',text=name.replace('_',' ').title())
             pbox.label(text='Arm parents: Root / Torso / Pelvis / Chest / Head')
             pbox.label(text='Leg parents: Root / Foot / Torso / Pelvis')
-        rbox=layout.box();rbox.label(text='Rig UI',icon='OUTLINER_OB_ARMATURE')
+        rbox=layout.box()
+        rbox.use_property_split = False
+        rbox.use_property_decorate = False
+        rbox.label(text='Rig UI',icon='OUTLINER_OB_ARMATURE')
         from .body_snap import draw_collections
         draw_collections(rbox,rig)
         layout.operator('metamorphosis.bake_rig_ui',text='Bake Rig UI',icon='FILE_SCRIPT')

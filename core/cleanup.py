@@ -7,8 +7,10 @@ import bpy
 from ..riglogic import bake
 
 OWNER = "mm_import_id"
-POOLS = ("objects", "collections", "meshes", "armatures", "curves", "materials",
-         "shape_keys", "actions", "node_groups", "textures", "images", "fonts", "cameras", "lights")
+POOLS = tuple(p for p in (
+    "objects", "collections", "meshes", "armatures", "curves", "hair_curves", "materials",
+    "shape_keys", "actions", "node_groups", "textures", "images", "fonts", "cameras", "lights"
+) if hasattr(bpy.data, p))
 
 
 def snapshot():
@@ -36,10 +38,19 @@ def targets(scene):
     tokens = {item.get(OWNER) for item in [*scene_objects, *collections] if item.get(OWNER)}
     objects = {o for o in scene_objects if o.get(OWNER) in tokens}
     containers = {c for c in collections if c.get(OWNER) in tokens}
-    # Older releases have no ownership tags. Use their explicit rig references,
-    # never assume every object placed in a character collection is imported.
+
+    # MetaMorphosis character armatures (Head, Body, Connected, Converted)
     for rig in scene_objects:
-        if rig.type != "ARMATURE" or bake.RIG_KEY_DATA not in rig:
+        if rig.type != "ARMATURE":
+            continue
+        is_mm_rig = bool(
+            bake.RIG_KEY_DATA in rig
+            or rig.get("mm_body_rig")
+            or rig.get("mm_attached_head")
+            or rig.get("mm_body_converter")
+            or rig.name.startswith(("METAHUMAN_BODY", "MH_"))
+        )
+        if not is_mm_rig:
             continue
         if rig.get("mm_combined_body"):
             # Older Combine Body operations merged user-owned bones into this ID.
@@ -47,18 +58,84 @@ def targets(scene):
             continue
         objects.add(rig)
         objects.update(bake.head_meshes(rig))
+
+        # Body meshes deformed by or parented to this rig
+        for o in scene_objects:
+            if o.type == "MESH":
+                if o.get("mm_body_mesh") or o.name.startswith("METAHUMAN_BODY"):
+                    objects.add(o)
+                elif o.parent == rig or any(m.type == "ARMATURE" and m.object == rig for m in o.modifiers):
+                    if o.get("mm_body_mesh") or o.get("mm_clothing") or o.name.startswith(("METAHUMAN_BODY", "MH_")):
+                        objects.add(o)
+
+        # Face board
         board = bpy.data.objects.get(str(rig.get(bake.RIG_KEY_BOARD_OBJECT, ""))) or rig
         if board in scene_objects:
             objects.add(board)
             objects.update(b.custom_shape for b in board.pose.bones if b.custom_shape is not None)
+
+        # Rig custom bone widget shapes (including body control shapes WGT_UNREAL_*)
+        for b in rig.pose.bones:
+            if b.custom_shape is not None and b.custom_shape in scene_objects:
+                objects.add(b.custom_shape)
+
+        # Native sum helper data objects
         for name in str(rig.get(bake.RIG_KEY_DATA, "")).split("\n"):
             obj = bpy.data.objects.get(name)
             if obj is not None and obj in scene_objects:
                 objects.add(obj)
-        root = bpy.data.collections.get(str(rig.get("mm_character_collection", "")))
-        if root in collections:
-            containers.add(root)
-            containers.update(c for c in root.children_recursive if c.get("mm_collection_role"))
+
+        # Character root collection
+        char_col_name = rig.get("mm_character_collection")
+        if char_col_name and char_col_name in bpy.data.collections:
+            root = bpy.data.collections[char_col_name]
+            if root in collections:
+                containers.add(root)
+                containers.update(c for c in root.children_recursive if c.get("mm_collection_role"))
+
+        # Associated user collections of this rig
+        for col in rig.users_collection:
+            if col in collections:
+                containers.add(col)
+                containers.update(c for c in col.children_recursive if c.get("mm_collection_role"))
+
+    # Include grooms, clothing and body meshes associated with the imported character or containers
+    for obj in scene_objects:
+        if obj in objects:
+            continue
+        is_groom = bool(
+            obj.get("mm_groom_kind")
+            or obj.get("mm_groom")
+            or (obj.type == "CURVES" and any(c.get("mm_collection_role") == "Groom" for c in obj.users_collection))
+        )
+        if is_groom:
+            surface = getattr(obj.data, "surface", None) if hasattr(obj, "data") else None
+            if (
+                obj.parent in objects
+                or (surface is not None and surface in objects)
+                or any(c in containers for c in obj.users_collection)
+                or any(c.get("mm_collection_role") == "Groom" for c in obj.users_collection)
+            ):
+                objects.add(obj)
+        elif obj.get("mm_clothing") or obj.get("mm_body_mesh"):
+            objects.add(obj)
+        elif obj.type == "MESH" and obj.parent in objects and any(m.type == "ARMATURE" and m.object in objects for m in obj.modifiers):
+            if obj.parent in objects or any(c in containers for c in obj.users_collection):
+                objects.add(obj)
+        # Any object inside METAHUMAN_BODY collections or MetaMorphosis role collections
+        elif any(c.name.startswith("METAHUMAN_BODY") or c.get("mm_collection_role") in ("BODY", "HEAD", "RIGLOGICDATA", "Groom") for c in obj.users_collection):
+            objects.add(obj)
+
+    # Ensure character, body, and groom collections are tracked in containers
+    for c in collections:
+        if c.get("mm_collection_role") in ("BODY", "HEAD", "ARMATURE", "FACE_BOARD", "Groom", "RIGLOGICDATA"):
+            containers.add(c)
+        elif c.name == "METAHUMAN_BODY" or c.name.startswith("METAHUMAN_BODY_") or c.name.startswith("WGTS_"):
+            containers.add(c)
+        elif any(parent in containers for parent in collections if c.name in parent.children) or any(o.name in c.objects for o in objects):
+            if c.get("mm_collection_role") or c.name.startswith(("METAHUMAN_BODY", "MH_")):
+                containers.add(c)
+
     return objects, containers, tokens
 
 
@@ -82,6 +159,8 @@ def remove_all(context):
         if obj.data is not None:
             legacy_data.add(obj.data)
             legacy_data.update(slot.material for slot in obj.material_slots if slot.material)
+            if hasattr(obj.data, "materials"):
+                legacy_data.update(m for m in obj.data.materials if m)
         if obj.get('mm_native_sum_data'):
             legacy_data.update(mod.node_group for mod in obj.modifiers
                                if mod.type == 'NODES' and mod.node_group

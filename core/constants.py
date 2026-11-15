@@ -33,3 +33,10 @@ REPORT_TEXT_NAME = "MetaMorphosis Report"
 MAX_EXPRESSION_LENGTH = 235
 
 FACE_BOARD_FILE_NAME = "face_board.blend"
+GROOM_ACC_FILE_NAME = "Groom Acc.blend"
+NEW_SHAPES_OG_FACE_RIG_FILE_NAME = "New_Shapes_OG_Face_Rig.blend"
+HDRI_PREVIEWS_DIR = ASSETS_DIR / "ui" / "hdri"
+DEFAULT_HDRI_DIR = Path(r"F:\AI\Training_Data\Materials\HDRI's")
+DEFAULT_GROOM_ACC_DIR = Path(r"F:\AI\Training_Data\Materials\Grooms")
+DEFAULT_FACE_RIG_DIR = Path(r"F:\AI\Training_Data\Face_Rig")
+

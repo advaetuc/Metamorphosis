@@ -112,6 +112,33 @@ version remains 1.8.1 until the major features are implemented and validated.
 - Eye materials separate the textured iris normal from the smooth coat normal,
   strengthen the tear-film coat, and add a small scale-aware subsurface component.
   These use Principled BSDF nodes supported by the existing material workflow.
+- Modular MetaHuman eye texture detection and setup (`eye_material`) support DCC
+  exports split into `Eyes_IrisBasecolor`, `Eyes_ScleraBasecolor`, `Eyes_Veins`,
+  `Eyes_IrisNormal`, `Eyes_ScleraNormal`, and `Eyes_Dust`. Eyeball UVs apply
+  a 3.03x concentric iris projection, a smooth limbus transition mask (0.145-0.175),
+  sclera vein multiplication, and smooth geometric corneal coat normals, while
+  preserving seamless backwards compatibility for legacy baked `Eyes_Color` / `Eyes_Normal`.
+- Wrinkle map auto-detection and modern 50% grey delta support (`detect_delta_maps`):
+  Identifies signed delta maps centered at 0.5 and tangent slope normal bleed.
+  Normal delta scaling restores Unreal Engine's `TG_AnimatedMaps` formula
+  `(Delta - 0.5) * 2.0 + Base` via `MM_NORMAL_DELTA_SCALE`.
+- `DNA_MATERIAL` exposes user-facing `NORMAL_WRINKLE_INTENSITY` (default 1.5 for deltas,
+  1.0 for legacy) and `COLOR_WRINKLE_INTENSITY` (default 0.45 for delta maps, 1.0 for legacy).
+  Grey wrinkle color maps are plugged into `COLOR_WRINKLE_1..3` inputs.
+- Eye shaders apply refined cinematic settings across both eye meshes and backends:
+  `Specular IOR Level` = 0.1, `Coat Weight` = 1.0, `Coat Roughness` = 0.035,
+  `Sheen Weight` = 1.0, `Sheen Roughness` = 0.2, `IOR` = 1.3, and normal map `Strength` = 2.0.
+- Bundled universal eye textures in `assets/` (`Eyes_ScleraBasecolor.png`, `Eyes_ScleraNormal.png`,
+  `Eyes_Veins.png`, `Eyes_IrisNormal.png`, `Eyes_Dust.png`) are registered in `UNIVERSAL_TEXTURES`
+  to supply procedural sclera/vein/normal fallbacks for any MetaHuman DCC export.
+- Skin detail normal defaults are updated to `DETAIL_STRENGTH` = 0.75 and `DETAIL_TILING` = 15.0.
+- Teeth Principled BSDF settings match the reference configuration: `Roughness` = 0.300,
+  `IOR` = 1.450, `Subsurface Weight` = 0.800, `Subsurface Radius` = (1.0, 0.2, 0.1),
+  `Subsurface Scale` = 0.001 m, `Specular IOR Level` = 0.800, `Anisotropic` = 0.500,
+  `Coat Weight` = 0.300, `Coat Roughness` = 0.600, `Coat IOR` = 1.000, `Sheen Weight` = 0.100,
+  `Sheen Roughness` = 0.000.
+- Monochrome delta merge (`MM_COLOR_DELTA_MONO`) uses symmetric signed luminance dot
+  products `(0.2126, 0.7152, 0.0722)` without asymmetric negative clamping.
 - Import overlay colors are lime and white, with a perimeter glow. Background
   imports skip the overlay, draw calls restore the GPU blending state, and addon
   disable removes the handler. This still redraws at import progress callbacks;
@@ -194,6 +221,15 @@ back after saving/reopening with the addon disabled. Local mapping time averaged
 - tests/blender_materials.py passed in Blender 5.2: real Logan import, native
   wrinkle parity, standalone save/reopen, and scoped cleanup. Log:
   work/materials190.log. This verifies material construction, not visual realism.
+- tests/blender_material_reapply.py passed in Blender 5.2.
+- tests/blender_wrinkle_delta_autodetect.py passed in Blender 5.2 and 5.0: delta map
+  and slope bleed classification, 2.0x normal delta scaling, 0.45 color intensity default,
+  plugged CM wrinkle maps, modular eye shader construction, universal eye asset integration,
+  and teeth BSDF configuration.
+- Full render verification on John Rambo passed with rich wrinkle expression dynamics,
+  zero texture bleeding, photorealistic eyes with specular/coat/sheen settings, and
+  reference-matched teeth shading. Render outputs: `rambo_updated_materials_render.png`
+  and `rambo_updated_teeth_render.png`.
 
 No ZIP, commit, or push was created.
 

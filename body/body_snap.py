@@ -20,9 +20,13 @@ def visible_collections(rig):
 
 
 def draw_collections(layout, rig):
+    layout.use_property_split = False
+    layout.use_property_decorate = False
     cols = {c.name: c for c in visible_collections(rig)}
     drawn = set()
     main = layout.column(align=False)
+    main.use_property_split = False
+    main.use_property_decorate = False
     for gi, group_rows in enumerate(COLLECTION_GROUPS):
         any_row = False
         for pair in group_rows:

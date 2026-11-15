@@ -15,7 +15,9 @@ from ..riglogic.logicmodel import RigLogicModel
 ASSET = Path(__file__).resolve().parents[1] / 'assets' / 'wrinkle_materials.blend'
 EYE_EDGE_ASSET = ASSET.with_name('eye_edge_materials.blend')
 UNIVERSAL_TEXTURES = ('Teeth_Color.png', 'Teeth_Normal.png', 'EyeLashes_Alpha.PNG',
-                      'T_SkinMicroNormal.PNG', 'T_SkinMicro3_N.PNG')
+                      'T_SkinMicroNormal.PNG', 'T_SkinMicro3_N.PNG',
+                      'Eyes_ScleraBasecolor.png', 'Eyes_ScleraNormal.png',
+                      'Eyes_Veins.png', 'Eyes_IrisNormal.png', 'Eyes_Dust.png')
 
 
 def caps(name):
@@ -23,7 +25,11 @@ def caps(name):
 
 
 def rename_created(before):
+    if not before:
+        return
     for pool in ('materials','node_groups'):
+        if pool not in before:
+            continue
         collection = getattr(bpy.data,pool)
         for item in collection:
             if item.as_pointer() in before[pool]:
@@ -53,7 +59,7 @@ def retire_material_sets(tokens):
 
 def texture_files(folder):
     """Accept the export root or Maps; respect manifest folders without broad searches."""
-    root = Path(bpy.path.abspath(folder))
+    root = Path(bpy.path.abspath(str(folder)))
     if not root.is_dir():
         raise ValueError('Choose the Unreal DCC export folder or its Maps folder')
     if root.name.lower() == 'maps':
@@ -76,6 +82,19 @@ def texture_files(folder):
         raise ValueError('Neither Head_Basecolor nor Body_Basecolor texture found in the selected export')
     if 'eyelashes_color' in files and 'eyelashes_alpha' not in files:
         files['eyelashes_alpha'] = files['eyelashes_color']
+    for target, variants in (
+        ('eyes_irisbasecolor', ('eyes_irisbasecolor', 'eyes_iris_basecolor', 'eyes_iriscolor', 'eye_irisbasecolor')),
+        ('eyes_sclerabasecolor', ('eyes_sclerabasecolor', 'eyes_sclera_basecolor', 'eyes_scleracolor', 'eye_sclerabasecolor')),
+        ('eyes_veins', ('eyes_veins', 'eyes_vein', 'eye_veins')),
+        ('eyes_irisnormal', ('eyes_irisnormal', 'eyes_iris_normal', 'eye_irisnormal')),
+        ('eyes_scleranormal', ('eyes_scleranormal', 'eyes_sclera_normal', 'eye_scleranormal')),
+        ('eyes_dust', ('eyes_dust', 'eye_dust')),
+    ):
+        if target not in files:
+            for v in variants:
+                if v in files:
+                    files[target] = files[v]
+                    break
     # These maps are shared by all characters and fall back to bundled assets if not in character export.
     for name in UNIVERSAL_TEXTURES:
         path = ASSET.parent/name
@@ -211,10 +230,148 @@ def realize_wrinkles(reader, model, variant, rig, board, group, collection, pref
     return counts['drivers'], holders
 
 
-def load_wrinkles(prefix):
+def is_delta_map(image):
+    """Detect whether a wrinkle map is a signed delta map centered at 0.5 grey."""
+    if not image:
+        return False
+    w, h = image.size
+    if w <= 0 or h <= 0:
+        return False
+    sample_indices = (
+        0,
+        4 * (w - 1),
+        4 * w * (h - 1),
+        4 * (w * h - 1),
+        4 * (w // 2),
+        4 * (w * (h - 1) + w // 2)
+    )
+    samples = []
+    try:
+        for idx in sample_indices:
+            r = image.pixels[idx]
+            g = image.pixels[idx + 1]
+            b = image.pixels[idx + 2]
+            samples.append((r, g, b))
+    except (IndexError, RuntimeError):
+        return False
+    if not samples:
+        return False
+    delta_count = 0
+    for r, g, b in samples:
+        if (0.44 <= r <= 0.56 and 0.44 <= g <= 0.56 and 0.44 <= b <= 0.56 and
+            abs(r - g) < 0.05 and abs(r - b) < 0.05 and abs(g - b) < 0.05):
+            delta_count += 1
+    return delta_count >= (len(samples) // 2)
+
+
+def is_normal_delta(image):
+    """Detect whether a 0.5-grey delta image contains tangent normal slope vectors."""
+    if not image or not is_delta_map(image):
+        return False
+    w, h = image.size
+    if w <= 0 or h <= 0:
+        return False
+    step = max(1, (w * h) // 1000)
+    g_over_r_count = 0
+    active_count = 0
+    try:
+        px = image.pixels
+        for i in range(0, len(px), step * 4):
+            r = px[i]
+            g = px[i+1]
+            b = px[i+2]
+            if abs(r - 0.5) > 0.04 or abs(g - 0.5) > 0.04 or abs(b - 0.5) > 0.04:
+                active_count += 1
+                if (g - r) > 0.035:
+                    g_over_r_count += 1
+    except (IndexError, RuntimeError):
+        return False
+    return active_count > 10 and (g_over_r_count / active_count) > 0.02
+
+
+def detect_delta_maps(files):
+    """Auto-detect whether wrinkle files use 0.5-grey delta format and detect normal slope bleed."""
+    delta_color = False
+    delta_normal = False
+    is_cm_normal = False
+    for i in (1, 2, 3):
+        cm_path = files.get(f'head_basecolor_animated_cm{i}')
+        if cm_path and Path(cm_path).is_file():
+            try:
+                probe = bpy.data.images.load(str(cm_path), check_existing=False)
+                delta_color = is_delta_map(probe)
+                if delta_color:
+                    is_cm_normal = is_normal_delta(probe)
+                bpy.data.images.remove(probe)
+            except Exception:
+                pass
+            break
+    for i in (1, 2, 3):
+        wm_path = files.get(f'head_normal_animated_wm{i}')
+        if wm_path and Path(wm_path).is_file():
+            try:
+                probe = bpy.data.images.load(str(wm_path), check_existing=False)
+                delta_normal = is_delta_map(probe)
+                bpy.data.images.remove(probe)
+            except Exception:
+                pass
+            break
+    return delta_color, delta_normal, is_cm_normal
+
+
+def _configure_delta_merge(tree, is_normal=False, is_cm_normal=False):
+    for node_name in ('MIX_006', 'MIX_007', 'MIX_008'):
+        n = tree.nodes.get(node_name)
+        if not n:
+            continue
+        for l in list(tree.links):
+            if l.to_node == n and l.to_socket.name == 'B':
+                tree.links.remove(l)
+        n.inputs['B'].default_value = (0.5, 0.5, 0.5, 1.0)
+    top_mix = tree.nodes.get('MIX')
+    if top_mix:
+        top_mix.clamp_result = True
+    mix_001 = tree.nodes.get('MIX_001')
+    if is_normal and mix_001 and top_mix:
+        scale_node = tree.nodes.new('ShaderNodeVectorMath')
+        scale_node.name = 'MM_NORMAL_DELTA_SCALE'
+        scale_node.operation = 'SCALE'
+        scale_node.inputs['Scale'].default_value = 2.0
+        for l in list(tree.links):
+            if l.from_node == mix_001 and l.to_node == top_mix:
+                tree.links.remove(l)
+        tree.links.new(mix_001.outputs['Result'], scale_node.inputs[0])
+        b_socket = top_mix.inputs.get('B_Color') or top_mix.inputs[7]
+        tree.links.new(scale_node.outputs['Vector'], b_socket)
+    elif is_cm_normal and mix_001 and top_mix:
+        dot_node = tree.nodes.new('ShaderNodeVectorMath')
+        dot_node.name = 'MM_COLOR_DELTA_MONO'
+        dot_node.operation = 'DOT_PRODUCT'
+        dot_node.inputs[1].default_value = (0.2126, 0.7152, 0.0722)
+        for l in list(tree.links):
+            if l.from_node == mix_001 and l.to_node == top_mix:
+                tree.links.remove(l)
+        tree.links.new(mix_001.outputs['Result'], dot_node.inputs[0])
+        b_socket = top_mix.inputs.get('B_Color') or top_mix.inputs[7]
+        tree.links.new(dot_node.outputs['Value'], b_socket)
+
+
+def load_wrinkles(prefix, is_delta_color=False, is_delta_normal=False, is_cm_normal=False):
     with bpy.data.libraries.load(str(ASSET), link=False) as (source, target):
         target.node_groups = ['MM_WRINKLE_BLEND']
     root = target.node_groups[0]
+    if is_delta_color and 'MERGEMAPS_001' in root.nodes:
+        m1 = root.nodes['MERGEMAPS_001']
+        c_tree = m1.node_tree.copy()
+        c_tree.name = 'MM_MERGEMAPS_COLOR'
+        m1.node_tree = c_tree
+        _configure_delta_merge(c_tree, is_normal=False, is_cm_normal=is_cm_normal)
+    if is_delta_normal and 'MERGEMAPS_002' in root.nodes:
+        m2 = root.nodes['MERGEMAPS_002']
+        n_tree = m2.node_tree.copy()
+        n_tree.name = 'MM_MERGEMAPS_NORMAL'
+        m2.node_tree = n_tree
+        _configure_delta_merge(n_tree, is_normal=True)
     seen = set()
     def rename(group):
         if group in seen:
@@ -269,8 +426,9 @@ def detail_group(prefix, files):
         return bpy.data.node_groups[name]
     tree = bpy.data.node_groups.new(name, 'ShaderNodeTree')
     socket(tree, 'BASE_NORMAL', 'Vector')
-    socket(tree, 'DETAIL_STRENGTH', 'Float', default=.15)
-    socket(tree, 'DETAIL_TILING', 'Float', default=20)
+    socket(tree, 'DETAIL_STRENGTH', 'Float', default=.75)
+    default_tiling = 45.0 if 'body' in prefix.lower() else 15.0
+    socket(tree, 'DETAIL_TILING', 'Float', default=default_tiling)
     socket(tree, 'NORMAL', 'Vector', 'OUTPUT')
     entry = node(tree, 'NodeGroupInput', 'INPUT', -1200, 350)
     out = node(tree, 'NodeGroupOutput', 'OUTPUT', 850, 100)
@@ -284,8 +442,9 @@ def detail_group(prefix, files):
     mix = node(tree, 'ShaderNodeMixRGB', 'MICRO_DETAIL_BLEND', -450, 100)
     mix.inputs[0].default_value = .5
     for image, index in ((a, 1), (b, 2)):
-        tree.links.new(mapping.outputs[0], image.inputs['Vector'])
-        tree.links.new(image.outputs['Color'], mix.inputs[index])
+        if image:
+            tree.links.new(mapping.outputs[0], image.inputs['Vector'])
+            tree.links.new(image.outputs['Color'], mix.inputs[index])
     micro = normal(tree, mix.outputs[0], None, -200, 100)
     tree.links.new(entry.outputs['DETAIL_STRENGTH'], micro.inputs['Strength'])
     delta = node(tree, 'ShaderNodeVectorMath', 'DETAIL_NORMAL_DELTA', 50, 100)
@@ -310,14 +469,18 @@ HEAD_INPUTS = (('BASE_COLOR', 'cm_base'), ('COLOR_WRINKLE_1', 'cm1'),
                ('NORMAL_WRINKLE_2', 'wm2'), ('NORMAL_WRINKLE_3', 'wm3'))
 
 
-def head_group(prefix, files, animated):
+def head_group(prefix, files, animated, is_delta_color=False, is_delta_normal=False, is_cm_normal=False):
     tree = bpy.data.node_groups.new(caps(prefix+'_DNA_MATERIAL'), 'ShaderNodeTree')
     for name, _ in HEAD_INPUTS:
         socket(tree, name, 'Color', default=(.5,.5,1,1) if 'NORMAL' in name else (.5,.5,.5,1))
     socket(tree, 'SPECULAR_ROUGHNESS_METALLIC', 'Color', default=(.5,.45,0,1))
     socket(tree, 'FUZZ_MASK', 'Float', default=0)
-    socket(tree, 'DETAIL_STRENGTH', 'Float', default=.15)
-    socket(tree, 'DETAIL_TILING', 'Float', default=20)
+    socket(tree, 'DETAIL_STRENGTH', 'Float', default=.75)
+    socket(tree, 'DETAIL_TILING', 'Float', default=15.0)
+    default_norm_intensity = 1.5 if is_delta_normal else 1.0
+    default_color_intensity = 0.45 if is_delta_color else 1.0
+    socket(tree, 'NORMAL_WRINKLE_INTENSITY', 'Float', default=default_norm_intensity)
+    socket(tree, 'COLOR_WRINKLE_INTENSITY', 'Float', default=default_color_intensity)
     for name, kind in (('COLOR','Color'), ('NORMAL','Vector'), ('SPECULAR','Float'),
                        ('ROUGHNESS','Float'), ('METALLIC','Float'), ('SHEEN','Float')):
         socket(tree, name, kind, 'OUTPUT')
@@ -328,7 +491,7 @@ def head_group(prefix, files, animated):
     weights = None
     if animated:
         weights = node(tree, 'ShaderNodeGroup', 'DNA_WRINKLES', -350, 300)
-        weights.node_tree = load_wrinkles(prefix)
+        weights.node_tree = load_wrinkles(prefix, is_delta_color, is_delta_normal, is_cm_normal)
         original = json.loads(weights.node_tree['mm_original_sockets'])
         inputs = {original[s.identifier]: s for s in weights.inputs}
         for name, original_name in HEAD_INPUTS:
@@ -336,7 +499,31 @@ def head_group(prefix, files, animated):
         for s, _ in wrinkle_sockets(weights):
             s.hide = True
         weights.width = 230
-        color, norm = weights.outputs['COLOR'], weights.outputs['NORMAL']
+
+        color_mix = node(tree, 'ShaderNodeMix', 'COLOR_WRINKLE_BLEND', 100, 300)
+        color_mix.data_type = 'RGBA'
+        color_mix.clamp_factor = True
+        color_mix.clamp_result = True
+        tree.links.new(entry.outputs['COLOR_WRINKLE_INTENSITY'], color_mix.inputs['Factor'])
+        tree.links.new(entry.outputs['BASE_COLOR'], color_mix.inputs[6])
+        tree.links.new(weights.outputs['COLOR'], color_mix.inputs[7])
+        color = color_mix.outputs[2]
+
+        n_delta = node(tree, 'ShaderNodeVectorMath', 'NORMAL_WRINKLE_DELTA', -50, 200)
+        n_delta.operation = 'SUBTRACT'
+        tree.links.new(weights.outputs['NORMAL'], n_delta.inputs[0])
+        tree.links.new(entry.outputs['BASE_NORMAL'], n_delta.inputs[1])
+
+        n_scale = node(tree, 'ShaderNodeVectorMath', 'NORMAL_WRINKLE_INTENSITY_SCALE', 150, 200)
+        n_scale.operation = 'SCALE'
+        tree.links.new(n_delta.outputs['Vector'], n_scale.inputs[0])
+        tree.links.new(entry.outputs['NORMAL_WRINKLE_INTENSITY'], n_scale.inputs['Scale'])
+
+        n_comb = node(tree, 'ShaderNodeVectorMath', 'NORMAL_WRINKLE_COMBINE', 350, 200)
+        n_comb.operation = 'ADD'
+        tree.links.new(entry.outputs['BASE_NORMAL'], n_comb.inputs[0])
+        tree.links.new(n_scale.outputs['Vector'], n_comb.inputs[1])
+        norm = n_comb.outputs['Vector']
     tree.links.new(color, out.inputs['COLOR'])
     tangent = normal(tree, norm, None, -70, 100)
     detail = node(tree, 'ShaderNodeGroup', 'SKIN_DETAIL', 170, 100)
@@ -376,8 +563,9 @@ def head_material(tree, bsdf, files, prefix, scale):
     bsdf.inputs['IOR'].default_value = 1.4
     g = node(tree, 'ShaderNodeGroup', 'DNA_MATERIAL', 0, 300)
     g.width = 280
+    delta_color, delta_normal, is_cm_normal = detect_delta_maps(files)
     animated = all(f'head_normal_animated_wm{i}' in files for i in (1,2,3)) and 'head_normal' in files and ASSET.is_file()
-    g.node_tree, weights = head_group(prefix, files, animated)
+    g.node_tree, weights = head_group(prefix, files, animated, delta_color, delta_normal, is_cm_normal)
     base = texture(tree, files, 'Head_Basecolor', True)
     norm = texture(tree, files, 'Head_Normal')
     packed = texture(tree, files, 'Head_SRMF')
@@ -391,10 +579,14 @@ def head_material(tree, bsdf, files, prefix, scale):
     colors, normals = [], []
     if animated:
         for i in (1,2,3):
-            cm = texture(tree, files, f'Head_Basecolor_Animated_CM{i}', True)
+            cm = texture(tree, files, f'Head_Basecolor_Animated_CM{i}', color=not delta_color)
             wm = texture(tree, files, f'Head_Normal_Animated_WM{i}')
-            tree.links.new((cm or base).outputs['Color'], g.inputs[f'COLOR_WRINKLE_{i}'])
-            tree.links.new(wm.outputs['Color'], g.inputs[f'NORMAL_WRINKLE_{i}'])
+            if cm:
+                tree.links.new(cm.outputs['Color'], g.inputs[f'COLOR_WRINKLE_{i}'])
+            elif not delta_color and base:
+                tree.links.new(base.outputs['Color'], g.inputs[f'COLOR_WRINKLE_{i}'])
+            if wm:
+                tree.links.new(wm.outputs['Color'], g.inputs[f'NORMAL_WRINKLE_{i}'])
             colors.append((cm,(i-1)*260,0)); normals.append((wm,(i-1)*260,0))
         frame(tree, 'COLOR_WRINKLES', colors, (-1100,780))
         frame(tree, 'NORMAL_WRINKLES', normals, (-1100,-80))
@@ -417,8 +609,8 @@ def body_group(prefix, files):
     socket(tree, 'BASE_NORMAL', 'Color', default=(.5,.5,1,1))
     socket(tree, 'SPECULAR_ROUGHNESS_METALLIC', 'Color', default=(.5,.45,0,1))
     socket(tree, 'FUZZ_MASK', 'Float', default=0)
-    socket(tree, 'DETAIL_STRENGTH', 'Float', default=.15)
-    socket(tree, 'DETAIL_TILING', 'Float', default=20)
+    socket(tree, 'DETAIL_STRENGTH', 'Float', default=.75)
+    socket(tree, 'DETAIL_TILING', 'Float', default=45.0)
     for name, kind in (('COLOR','Color'), ('NORMAL','Vector'), ('SPECULAR','Float'),
                        ('ROUGHNESS','Float'), ('METALLIC','Float'), ('SHEEN','Float')):
         socket(tree, name, kind, 'OUTPUT')
@@ -452,6 +644,8 @@ def body_material(tree, bsdf, files, prefix, scale):
     g = node(tree, 'ShaderNodeGroup', 'BODY_MATERIAL', 0, 300)
     g.width = 280
     g.node_tree = body_group(prefix, files)
+    if 'DETAIL_TILING' in g.inputs:
+        g.inputs['DETAIL_TILING'].default_value = 45.0
     base = texture(tree, files, 'Body_Basecolor', True)
     norm = texture(tree, files, 'Body_Normal')
     packed = texture(tree, files, 'Body_SRMF')
@@ -467,6 +661,141 @@ def body_material(tree, bsdf, files, prefix, scale):
                            ('ROUGHNESS','Roughness'), ('METALLIC','Metallic'), ('SHEEN','Sheen Weight')):
         tree.links.new(g.outputs[source], bsdf.inputs[target])
     return g
+
+
+def eye_material(tree, bsdf, files, prefix, rig_scale=0.01):
+    has_modular = ('eyes_irisbasecolor' in files) or ('eyes_sclerabasecolor' in files and 'eyes_color' not in files)
+    has_baked = ('eyes_color' in files)
+
+    bsdf.inputs['Roughness'].default_value = .32
+    bsdf.inputs['IOR'].default_value = 1.3
+    bsdf.inputs['Coat Weight'].default_value = 1.0
+    bsdf.inputs['Coat Roughness'].default_value = .035
+    bsdf.inputs['Coat IOR'].default_value = 1.376
+    bsdf.inputs['Specular IOR Level'].default_value = 0.1
+    if 'Sheen Weight' in bsdf.inputs:
+        bsdf.inputs['Sheen Weight'].default_value = 1.0
+    if 'Sheen Roughness' in bsdf.inputs:
+        bsdf.inputs['Sheen Roughness'].default_value = 0.2
+    geometry = node(tree, 'ShaderNodeNewGeometry', 'SMOOTH_CORNEA', 100, -240)
+    tree.links.new(geometry.outputs['Normal'], bsdf.inputs['Coat Normal'])
+    bsdf.inputs['Subsurface Weight'].default_value = .025
+    bsdf.inputs['Subsurface Radius'].default_value = (1.0, .35, .2)
+    bsdf.inputs['Subsurface Scale'].default_value = .00025 * rig_scale / .01
+
+    if has_modular:
+        tex_coord = node(tree, 'ShaderNodeTexCoord', 'EYE_TEXCOORD', -1000, 300)
+        uv_sub = node(tree, 'ShaderNodeVectorMath', 'EYE_UV_CENTER', -800, 300)
+        uv_sub.operation = 'SUBTRACT'
+        tree.links.new(tex_coord.outputs['UV'], uv_sub.inputs[0])
+        uv_sub.inputs[1].default_value = (0.5, 0.5, 0.0)
+
+        uv_dist = node(tree, 'ShaderNodeVectorMath', 'EYE_UV_RADIUS', -600, 150)
+        uv_dist.operation = 'LENGTH'
+        tree.links.new(uv_sub.outputs['Vector'], uv_dist.inputs[0])
+
+        iris_scale = node(tree, 'ShaderNodeVectorMath', 'EYE_IRIS_UV_SCALE', -600, 450)
+        iris_scale.operation = 'SCALE'
+        tree.links.new(uv_sub.outputs['Vector'], iris_scale.inputs[0])
+        iris_scale.inputs['Scale'].default_value = 3.0303
+
+        iris_uv = node(tree, 'ShaderNodeVectorMath', 'EYE_IRIS_UV', -400, 450)
+        iris_uv.operation = 'ADD'
+        tree.links.new(iris_scale.outputs['Vector'], iris_uv.inputs[0])
+        iris_uv.inputs[1].default_value = (0.5, 0.5, 0.0)
+
+        limbus = node(tree, 'ShaderNodeMapRange', 'EYE_LIMBUS_MASK', -400, 150)
+        limbus.clamp = True
+        limbus.inputs['From Min'].default_value = 0.145
+        limbus.inputs['From Max'].default_value = 0.175
+        limbus.inputs['To Min'].default_value = 0.0
+        limbus.inputs['To Max'].default_value = 1.0
+        tree.links.new(uv_dist.outputs['Value'], limbus.inputs['Value'])
+
+        iris_col = texture(tree, files, 'Eyes_IrisBasecolor', color=True, x=-200, y=550)
+        if iris_col:
+            tree.links.new(iris_uv.outputs['Vector'], iris_col.inputs['Vector'])
+            iris_col.extension = 'CLIP'
+
+        sclera_col = texture(tree, files, 'Eyes_ScleraBasecolor', color=True, x=-200, y=250)
+        if sclera_col:
+            tree.links.new(tex_coord.outputs['UV'], sclera_col.inputs['Vector'])
+
+        veins = texture(tree, files, 'Eyes_Veins', color=True, x=-200, y=50)
+        if veins:
+            tree.links.new(tex_coord.outputs['UV'], veins.inputs['Vector'])
+
+        if veins and sclera_col:
+            mix_veins = node(tree, 'ShaderNodeMix', 'EYE_SCLERA_VEINS', 50, 200)
+            mix_veins.data_type = 'RGBA'
+            mix_veins.blend_type = 'MULTIPLY'
+            mix_veins.inputs['Factor'].default_value = 1.0
+            tree.links.new(sclera_col.outputs['Color'], mix_veins.inputs[6])
+            tree.links.new(veins.outputs['Color'], mix_veins.inputs[7])
+            sclera_out = mix_veins.outputs[2]
+        else:
+            sclera_out = sclera_col.outputs['Color'] if sclera_col else None
+
+        if iris_col and sclera_out:
+            mix_col = node(tree, 'ShaderNodeMix', 'EYE_COLOR_MIX', 250, 400)
+            mix_col.data_type = 'RGBA'
+            mix_col.blend_type = 'MIX'
+            tree.links.new(limbus.outputs['Result'], mix_col.inputs['Factor'])
+            tree.links.new(iris_col.outputs['Color'], mix_col.inputs[6])
+            tree.links.new(sclera_out, mix_col.inputs[7])
+            tree.links.new(mix_col.outputs[2], bsdf.inputs['Base Color'])
+        elif iris_col:
+            tree.links.new(iris_col.outputs['Color'], bsdf.inputs['Base Color'])
+        elif sclera_out:
+            tree.links.new(sclera_out, bsdf.inputs['Base Color'])
+
+        iris_norm = texture(tree, files, 'Eyes_IrisNormal', color=False, x=-200, y=-200)
+        if iris_norm:
+            tree.links.new(iris_uv.outputs['Vector'], iris_norm.inputs['Vector'])
+        sclera_norm = texture(tree, files, 'Eyes_ScleraNormal', color=False, x=-200, y=-400)
+        if sclera_norm:
+            tree.links.new(tex_coord.outputs['UV'], sclera_norm.inputs['Vector'])
+
+        if iris_norm and sclera_norm:
+            mix_norm = node(tree, 'ShaderNodeMix', 'EYE_NORMAL_MIX', 50, -300)
+            mix_norm.data_type = 'RGBA'
+            mix_norm.blend_type = 'MIX'
+            tree.links.new(limbus.outputs['Result'], mix_norm.inputs['Factor'])
+            tree.links.new(iris_norm.outputs['Color'], mix_norm.inputs[6])
+            tree.links.new(sclera_norm.outputs['Color'], mix_norm.inputs[7])
+            n_node = normal(tree, mix_norm.outputs[2], bsdf, x=250, y=-300)
+            n_node.inputs['Strength'].default_value = 2.0
+        elif iris_norm:
+            n_node = normal(tree, iris_norm.outputs['Color'], bsdf, x=250, y=-300)
+            n_node.inputs['Strength'].default_value = 2.0
+        elif sclera_norm:
+            n_node = normal(tree, sclera_norm.outputs['Color'], bsdf, x=250, y=-300)
+            n_node.inputs['Strength'].default_value = 2.0
+
+        dust = texture(tree, files, 'Eyes_Dust', color=False, x=-200, y=-50)
+        if dust:
+            tree.links.new(tex_coord.outputs['UV'], dust.inputs['Vector'])
+            dust_mix = node(tree, 'ShaderNodeMix', 'EYE_DUST_ROUGHNESS', 100, -100)
+            dust_mix.data_type = 'FLOAT'
+            dust_mix.blend_type = 'MIX'
+            dust_mix.inputs['Factor'].default_value = 0.15
+            dust_mix.inputs[2].default_value = 0.32
+            tree.links.new(dust.outputs['Color'], dust_mix.inputs[3])
+            tree.links.new(dust_mix.outputs[0], bsdf.inputs['Roughness'])
+        return None
+    elif has_baked:
+        base = texture(tree, files, 'Eyes_Color', True, x=-500, y=400)
+        nm = texture(tree, files, 'Eyes_Normal', x=-500, y=0)
+        if not nm and 'eyes_scleranormal' in files:
+            nm = texture(tree, files, 'Eyes_ScleraNormal', x=-500, y=0)
+        if base:
+            tree.links.new(base.outputs['Color'], bsdf.inputs['Base Color'])
+        if nm:
+            n_node = normal(tree, nm.outputs['Color'], bsdf)
+            n_node.inputs['Strength'].default_value = 2.0
+        return None
+    else:
+        return 'Eyes_Color is missing; using a fallback material'
 
 
 def eye_edge_material(prefix, side):
@@ -539,7 +868,7 @@ def setup(reader, model, variant, rig, board, meshes, folder, collection, prefix
     files = texture_files(folder)
     before = cleanup.snapshot()
     primary_rig = rig or body_rig
-    token = primary_rig.get(cleanup.OWNER) or cleanup.new_token()
+    token = (primary_rig.get(cleanup.OWNER) if primary_rig else None) or cleanup.new_token()
     material_set = cleanup.new_token()
     assignments, warnings, holders = [], [], []
     driver_count = 0
@@ -585,11 +914,11 @@ def setup(reader, model, variant, rig, board, meshes, folder, collection, prefix
             bsdf.width = 240
             output = node(tree, 'ShaderNodeOutputMaterial', 'MATERIAL_OUTPUT', 760, 300)
             tree.links.new(bsdf.outputs[0], output.inputs['Surface'])
-            base = texture(tree, files, color, True, x=-500, y=400) if color and category not in ('HEAD', 'BODY') else None
-            nm = texture(tree, files, norm, x=-500, y=0) if norm and category not in ('HEAD', 'BODY') else None
+            base = texture(tree, files, color, True, x=-500, y=400) if color and category not in ('HEAD', 'BODY', 'EYELEFT', 'EYERIGHT') else None
+            nm = texture(tree, files, norm, x=-500, y=0) if norm and category not in ('HEAD', 'BODY', 'EYELEFT', 'EYERIGHT') else None
             if base:
                 tree.links.new(base.outputs['Color'], bsdf.inputs['Base Color'])
-            elif color and category not in ('HEAD', 'BODY'):
+            elif color and category not in ('HEAD', 'BODY', 'EYELEFT', 'EYERIGHT'):
                 warnings.append(f'{color} is missing; using a fallback material')
             if nm:
                 normal(tree, nm.outputs['Color'], bsdf)
@@ -606,26 +935,37 @@ def setup(reader, model, variant, rig, board, meshes, folder, collection, prefix
                 scale = float(body_rig.get('mm_body_scale', primary_rig.get('mm_body_scale', primary_rig.get(bake.RIG_KEY_SCALE, .01))) if body_rig else primary_rig.get('mm_body_scale', primary_rig.get(bake.RIG_KEY_SCALE, .01)))
                 body_material(tree, bsdf, files, mat_prefix, scale)
                 frame(tree, 'SURFACE_OUTPUT', [(bsdf,0,0),(output,320,0)], (400,300))
+            elif category in ('EYELEFT', 'EYERIGHT'):
+                scale = float(primary_rig.get(bake.RIG_KEY_SCALE, .01)) if primary_rig else .01
+                warn = eye_material(tree, bsdf, files, mat_prefix, scale)
+                if warn:
+                    warnings.append(warn)
+                frame(tree, 'SURFACE_OUTPUT', [(bsdf,0,0),(output,320,0)], (400,300))
             elif category == 'TEETH':
-                bsdf.inputs['Roughness'].default_value = .28
-                bsdf.inputs['Subsurface Weight'].default_value = .08
-                bsdf.inputs['Subsurface Scale'].default_value = .001
-            elif color == 'Eyes_Color':
-                # Layer a broad corneal reflection over the detailed iris/sclera.
-                # Principled BSDF remains supported in both Eevee and Cycles.
-                bsdf.inputs['Roughness'].default_value = .32
-                bsdf.inputs['IOR'].default_value = 1.38
-                bsdf.inputs['Coat Weight'].default_value = 1.0
-                bsdf.inputs['Coat Roughness'].default_value = .035
-                bsdf.inputs['Coat IOR'].default_value = 1.376
-                bsdf.inputs['Specular IOR Level'].default_value = .5
-                # Iris relief belongs beneath a smooth tear-film reflection.
-                # Explicit geometric normals keep the coat free of texture bumps.
-                geometry = node(tree, 'ShaderNodeNewGeometry', 'SMOOTH_CORNEA', 100, -240)
-                tree.links.new(geometry.outputs['Normal'], bsdf.inputs['Coat Normal'])
-                bsdf.inputs['Subsurface Weight'].default_value = .025
-                bsdf.inputs['Subsurface Radius'].default_value = (1.0, .35, .2)
-                bsdf.inputs['Subsurface Scale'].default_value = .00025 * float(primary_rig.get(bake.RIG_KEY_SCALE, .01)) / .01
+                def set_input(name, val):
+                    if name in bsdf.inputs:
+                        bsdf.inputs[name].default_value = val
+
+                set_input('Roughness', 0.3)
+                set_input('IOR', 1.45)
+                set_input('Alpha', 1.0)
+                set_input('Thin Wall', False)
+                set_input('Diffuse Roughness', 0.0)
+                set_input('Subsurface Weight', 0.8)
+                set_input('Subsurface Radius', (1.0, 0.2, 0.1))
+                scale = float(rig.get(bake.RIG_KEY_SCALE, .01) if rig else .01)
+                set_input('Subsurface Scale', 0.001 * scale / .01)
+                set_input('Subsurface Anisotropy', 0.0)
+                set_input('Specular IOR Level', 0.8)
+                if 'Anisotropic' in bsdf.inputs:
+                    bsdf.inputs['Anisotropic'].default_value = 0.5
+                elif 'Specular Anisotropy' in bsdf.inputs:
+                    bsdf.inputs['Specular Anisotropy'].default_value = 0.5
+                set_input('Coat Weight', 0.3)
+                set_input('Coat Roughness', 0.6)
+                set_input('Coat IOR', 1.0)
+                set_input('Sheen Weight', 0.1)
+                set_input('Sheen Roughness', 0.0)
             elif category == 'EYELASHES':
                 bsdf.inputs['Base Color'].default_value = (.015,.008,.005,1)
                 alpha = texture(tree, files, 'EyeLashes_Alpha', x=-200, y=300)
@@ -649,7 +989,7 @@ def setup(reader, model, variant, rig, board, meshes, folder, collection, prefix
             else:
                 mesh.data.materials.append(mat)
         for r in {r for r in (rig, body_rig) if r is not None}:
-            r['mm_texture_folder'] = str(Path(bpy.path.abspath(folder)))
+            r['mm_texture_folder'] = str(Path(bpy.path.abspath(str(folder))))
             if r == rig and driver_count:
                 r['mm_material_drivers'] = driver_count
     except Exception:
@@ -669,6 +1009,80 @@ def setup(reader, model, variant, rig, board, meshes, folder, collection, prefix
             *[f'Warning: {w}' for w in warnings]]
 
 
+def set_body_detail_tiling(target=None, value=45.0):
+    """Ensure all body materials and node groups have Detail Tiling set to value (default 45.0)."""
+    val = float(value)
+    # 1. Update any existing node groups related to body
+    for ng in bpy.data.node_groups:
+        if 'body' in ng.name.lower() or 'skin_detail' in ng.name.lower():
+            if hasattr(ng, 'interface') and hasattr(ng.interface, 'items_tree'):
+                if 'DETAIL_TILING' in ng.interface.items_tree:
+                    try:
+                        ng.interface.items_tree['DETAIL_TILING'].default_value = val
+                    except Exception:
+                        pass
+    # 2. Check materials
+    materials_to_check = set()
+    if target is not None:
+        objs = target if isinstance(target, (list, tuple, set)) else [target]
+        for obj in objs:
+            if hasattr(obj, 'material_slots'):
+                for slot in obj.material_slots:
+                    if slot.material:
+                        materials_to_check.add(slot.material)
+    if not materials_to_check:
+        for mat in bpy.data.materials:
+            if 'body' in mat.name.lower():
+                materials_to_check.add(mat)
+    for mat in materials_to_check:
+        if mat and mat.node_tree:
+            for n in mat.node_tree.nodes:
+                if 'DETAIL_TILING' in n.inputs:
+                    n.inputs['DETAIL_TILING'].default_value = val
+
+
+def setup_materials(context, folder):
+    """Apply materials from the specified folder to the character meshes."""
+    context.scene.mm_texture_folder = str(folder)
+    head_rig, body_rig = find_character_rigs(context)
+    if head_rig is None and body_rig is None:
+        raise ValueError('Select an imported head or body rig')
+    reader = None
+    try:
+        head_m = bake.head_meshes(head_rig) if head_rig else []
+        body_m = body_meshes(body_rig) if body_rig else []
+        all_meshes = head_m + body_m
+        if not all_meshes:
+            raise ValueError('No head or body meshes found to apply materials to')
+        model = None
+        variant = None
+        board = None
+        if head_rig and head_m:
+            from .operators import get_preferences
+            prefs = get_preferences(context)
+            bindings = prefs.bindings_folder if prefs else ''
+            reader = dnaio.open_reader(Path(head_rig[bake.RIG_KEY_DNA]), bindings)
+            model = RigLogicModel.from_reader(reader)
+            _, rl, _ = dnaio.load_bindings(bindings)
+            result = verify.verify_model(model, rl, reader, release=dnaio.release_handle)
+            if result.status == 'failed':
+                raise ValueError(result.message)
+            variant = result.variant or model.variants()[0]
+            board = bpy.data.objects.get(str(head_rig.get(bake.RIG_KEY_BOARD_OBJECT, '')))
+        primary_rig = head_rig or body_rig
+        collection = primary_rig.users_collection[0] if primary_rig.users_collection else context.scene.collection
+        prefix = primary_rig.get(bake.RIG_KEY_PREFIX) or primary_rig.name.replace('_RIG', '')
+        lod = int(primary_rig.get('mm_lod', 0))
+        report = setup(reader, model, variant, head_rig or primary_rig, board,
+                       all_meshes, folder, collection, prefix, lod, body_rig=body_rig)
+        set_body_detail_tiling(all_meshes, value=45.0)
+        bake.write_report(report)
+        return report
+    finally:
+        if reader is not None:
+            dnaio.release_handle(reader)
+
+
 class MM_OT_materials(bpy.types.Operator):
     bl_idname = 'metamorphosis.setup_materials'
     bl_label = 'Apply Materials to Rig'
@@ -678,44 +1092,11 @@ class MM_OT_materials(bpy.types.Operator):
         folder = context.scene.mm_texture_folder
         if not folder:
             self.report({'ERROR'}, 'Choose a texture source folder'); return {'CANCELLED'}
-        head_rig, body_rig = find_character_rigs(context)
-        if head_rig is None and body_rig is None:
-            self.report({'ERROR'}, 'Select an imported head or body rig'); return {'CANCELLED'}
-        reader = None
         try:
-            head_m = bake.head_meshes(head_rig) if head_rig else []
-            body_m = body_meshes(body_rig) if body_rig else []
-            all_meshes = head_m + body_m
-            if not all_meshes:
-                raise ValueError('No head or body meshes found to apply materials to')
-            model = None
-            variant = None
-            board = None
-            if head_rig and head_m:
-                from .operators import get_preferences
-                prefs = get_preferences(context)
-                bindings = prefs.bindings_folder if prefs else ''
-                reader = dnaio.open_reader(Path(head_rig[bake.RIG_KEY_DNA]), bindings)
-                model = RigLogicModel.from_reader(reader)
-                _, rl, _ = dnaio.load_bindings(bindings)
-                result = verify.verify_model(model, rl, reader, release=dnaio.release_handle)
-                if result.status == 'failed':
-                    raise ValueError(result.message)
-                variant = result.variant or model.variants()[0]
-                board = bpy.data.objects.get(str(head_rig.get(bake.RIG_KEY_BOARD_OBJECT, '')))
-            primary_rig = head_rig or body_rig
-            collection = primary_rig.users_collection[0] if primary_rig.users_collection else context.scene.collection
-            prefix = primary_rig.get(bake.RIG_KEY_PREFIX) or primary_rig.name.replace('_RIG', '')
-            lod = int(primary_rig.get('mm_lod', 0))
-            report = setup(reader, model, variant, head_rig or primary_rig, board,
-                           all_meshes, folder, collection, prefix, lod, body_rig=body_rig)
-            bake.write_report(report)
+            report = setup_materials(context, folder)
             self.report({'INFO'}, report[0])
         except Exception as error:
             self.report({'ERROR'}, str(error)); return {'CANCELLED'}
-        finally:
-            if reader is not None:
-                dnaio.release_handle(reader)
         return {'FINISHED'}
 
 
@@ -728,4 +1109,5 @@ def register():
 
 
 def unregister():
-    del bpy.types.Scene.mm_texture_folder
+    if hasattr(bpy.types.Scene, 'mm_texture_folder'):
+        del bpy.types.Scene.mm_texture_folder

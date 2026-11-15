@@ -126,7 +126,9 @@ class MM_OT_import_dna(bpy.types.Operator, ImportHelper):
         import_snapshot = None
         import_token = cleanup.new_token()
         wm.progress_begin(0, 100)
-        progress_ui.begin("Reading DNA file")
+        parent_progress_active = progress_ui._is_active
+        if not parent_progress_active:
+            progress_ui.begin("Reading DNA file")
         started = time.perf_counter()
         try:
             wm.progress_update(2)
@@ -174,6 +176,7 @@ class MM_OT_import_dna(bpy.types.Operator, ImportHelper):
                     progress_ui.update(int(15 + 38 * fraction), "Importing head geometry"),
                 ),
             )
+            organization.remove_custom_normals(imported.meshes)
             report_lines += [f"Imported {len(imported.meshes)} meshes + rig '{imported.rig.name}'"]
             report_lines += [f"Warning: {w}" for w in imported.warnings]
 
@@ -242,7 +245,21 @@ class MM_OT_import_dna(bpy.types.Operator, ImportHelper):
             if reader is not None:
                 dnaio.release_handle(reader)
             wm.progress_end()
-            progress_ui.end()
+            if not parent_progress_active:
+                progress_ui.end()
+
+        # Remove custom split normals on character meshes
+        try:
+            organization.remove_custom_normals(imported.meshes)
+        except Exception:
+            pass
+
+        # Close all collections in outliner (only if standalone DNA import)
+        if not parent_progress_active:
+            try:
+                organization.close_all_collections(context)
+            except Exception:
+                pass
 
         report_lines.append(f"Total time: {time.perf_counter() - started:.1f}s")
         bake.write_report(report_lines)
@@ -284,6 +301,7 @@ class MM_OT_remove_all(bpy.types.Operator):
         )
 
     def execute(self, context):
+        progress_ui.end()
         count = cleanup.remove_all(context)
         self.report({"INFO"}, f"Removed {count} imported objects; unrelated/shared content preserved")
         return {"FINISHED"}
